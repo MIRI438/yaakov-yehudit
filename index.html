@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="he">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ספירת נסיבה - 15.02.2026</title>
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="bg" class="bg"></div>
+  <div class="controls">
+    <label class="file-label" title="בחר תמונה מהרשת/ממחשבך">
+      בחר תמונה
+      <input id="file" type="file" accept="image/*">
+    </label>
+    <button id="useDefault" class="small">השתמש בתמונה המקורית</button>
+    <button id="clearBg" class="small">החזר לשחור</button>
+    <button id="toggleFit" class="small">מלא מסך</button>
+    <button id="soundToggle" class="small">צליל: הפעל</button>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+
+  <main class="center">
+    <div id="countdown" class="countdown" role="status" aria-live="polite">
+      <div class="count-row big">
+        <div class="count-item">
+          <div class="num large" id="days">0</div>
+          <div class="label">ימים</div>
+        </div>
+        <div class="count-item">
+          <div class="num large" id="hours">00</div>
+          <div class="label">שעות</div>
+        </div>
+        <div class="count-item">
+          <div class="num large" id="minutes">00</div>
+          <div class="label">דקות</div>
+        </div>
+        <div class="count-item">
+          <div class="num large" id="seconds">00</div>
+          <div class="label">שניות</div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <div id="hearts" class="hearts" aria-hidden="true"></div>
+
+  <script src="script.js"></script>
+</body>
+</html>
