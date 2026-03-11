@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="he">
+<head>
+  <meta charset="UTF-8">
+  <title>שתי תמונות</title>
+  <style>
+    body {
+      max-width: 800px; /* רוחב "עמוד רגיל" */
+      margin: 0 auto;    /* מרכז את העמוד */
+      text-align: center;
+    }
+    .image-container {
+      display: flex;
+      justify-content: center;
+      gap: 10px; /* רווח בין התמונות */
+    }
+    .image-container img {
+      width: 50%;  /* כל תמונה תתפוס חצי מרוחב הקונטיינר */
+      height: auto;
+    }
+  </style>
+</head>
+<body>
+  <h1>שתי תמונות זו לצד זו</h1>
+  <div class="image-container">
+    <img src="https://egud.org.il/wp-content/uploads/2026/03/סינרו-חזון-וערכים-scaled.jpg" alt="תמונה 1">
+    <img src="https://egud.org.il/wp-content/uploads/2026/03/00איגוד-חזון-וערכים-חדש-scaled.jpg" alt="תמונה 2">
+  </div>
+</body>
+</html>
