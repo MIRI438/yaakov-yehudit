@@ -1,0 +1,23 @@
+{
+  "name": "email-image-bot",
+  "version": "1.0.0",
+  "description": "Email bot: send a Leonardo / Freepik / Magnific link, get the image back by email",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node --env-file=.env src/index.js"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "imapflow": "^2.4.0",
+    "mailparser": "^3.9.38",
+    "nodemailer": "^10.1.0"
+  },
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20.6"
+  },
+  "optionalDependencies": {
+    "playwright": "1.64.0"
+  }
+}

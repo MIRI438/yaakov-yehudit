@@ -1,0 +1,169 @@
+// Email bot: anyone who emails a Leonardo / Freepik / Magnific link gets the image back as an attachment.
+
+import { ImapFlow } from 'imapflow';
+import { simpleParser } from 'mailparser';
+import nodemailer from 'nodemailer';
+import { config } from './config.js';
+import { findLinks, getImageFromLink } from './extract.js';
+
+const log = (...args) => console.log(new Date().toISOString(), ...args);
+
+const transporter = nodemailer.createTransport({
+  ...config.smtp,
+  auth: { user: config.email, pass: config.password },
+});
+
+// ---- protection against loops and abuse ----
+
+const recentBySender = new Map(); // sender -> [timestamps]
+
+function rateLimited(sender) {
+  const hourAgo = Date.now() - 60 * 60 * 1000;
+  const times = (recentBySender.get(sender) || []).filter((t) => t > hourAgo);
+  times.push(Date.now());
+  recentBySender.set(sender, times);
+  return times.length > config.maxEmailsPerSenderPerHour;
+}
+
+function shouldIgnore(mail, sender) {
+  if (!sender) return 'no sender';
+  if (sender === config.email.toLowerCase()) return 'from myself';
+  if (/^(mailer-daemon|postmaster|no-?reply|do-?not-?reply)@/i.test(sender)) return 'system address';
+  const autoSubmitted = String(mail.headers.get('auto-submitted') || 'no').toLowerCase();
+  if (autoSubmitted !== 'no') return 'auto-submitted';
+  if (/^(bulk|list|junk|auto_reply)$/i.test(String(mail.headers.get('precedence') || ''))) return 'bulk/list';
+  if (mail.headers.get('x-autoreply') || mail.headers.get('x-autorespond')) return 'auto-reply';
+  return null;
+}
+
+// ---- handling a single email ----
+
+async function handleMessage(source) {
+  const mail = await simpleParser(source);
+  const replyTo = mail.replyTo?.value?.[0]?.address || mail.from?.value?.[0]?.address;
+  const sender = replyTo?.toLowerCase();
+
+  const ignoreReason = shouldIgnore(mail, sender);
+  if (ignoreReason) {
+    log(`skipping message from ${sender || '?'}: ${ignoreReason}`);
+    return;
+  }
+  // No Leonardo / Freepik / Magnific link: ignore the email completely (no reply).
+  const links = findLinks(mail.text, mail.html || '');
+  if (links.length === 0) {
+    log(`no supported link in message from ${sender}, ignoring`);
+    return;
+  }
+  if (rateLimited(sender)) {
+    log(`rate limit reached for ${sender}, skipping`);
+    return;
+  }
+  log(`message from ${sender}: ${links.length} link(s)`);
+
+  const attachments = [];
+  const failures = [];
+  let totalBytes = 0;
+
+  const results = await Promise.allSettled(links.map((link) => getImageFromLink(link)));
+  results.forEach((r, i) => {
+    if (r.status === 'rejected') {
+      failures.push(`${links[i]}\n   ← ${r.reason?.message || r.reason}`);
+      return;
+    }
+    if (totalBytes + r.value.content.length > config.maxTotalBytes) {
+      failures.push(`${links[i]}\n   ← לא נכנס במייל (מגבלת גודל). קישור ישיר: ${r.value.sourceUrl}`);
+      return;
+    }
+    totalBytes += r.value.content.length;
+    const name = attachments.some((a) => a.filename === r.value.filename)
+      ? `${i + 1}_${r.value.filename}`
+      : r.value.filename;
+    attachments.push({ filename: name, content: r.value.content, contentType: r.value.contentType });
+  });
+
+  let text = attachments.length
+    ? `שלום,\n\nמצורפות ${attachments.length} תמונות מהקישורים ששלחת.\n`
+    : 'שלום,\n\nלא הצלחתי להוריד תמונה מהקישורים ששלחת.\n';
+  if (failures.length) text += `\nקישורים שלא הצליחו:\n${failures.map((f) => `• ${f}`).join('\n')}\n`;
+
+  const subject = mail.subject ? (/^re:/i.test(mail.subject) ? mail.subject : `Re: ${mail.subject}`) : 'התמונה שלך';
+  await transporter.sendMail({
+    from: config.email,
+    to: replyTo,
+    subject,
+    text,
+    attachments,
+    inReplyTo: mail.messageId,
+    references: [...(mail.references ? [].concat(mail.references) : []), mail.messageId].filter(Boolean),
+    headers: { 'Auto-Submitted': 'auto-replied' },
+  });
+  log(`replied to ${sender}: ${attachments.length} image(s), ${failures.length} failure(s)`);
+}
+
+// ---- mailbox watching ----
+
+let client;
+let checking = false;
+let checkAgain = false;
+
+async function checkInbox() {
+  if (checking) {
+    checkAgain = true;
+    return;
+  }
+  checking = true;
+  try {
+    do {
+      checkAgain = false;
+      const uids = (await client.search({ seen: false }, { uid: true })) || [];
+      for (const uid of uids) {
+        // Mark as read first so a crash never makes us answer the same email twice.
+        await client.messageFlagsAdd({ uid: String(uid) }, ['\\Seen'], { uid: true });
+        const msg = await client.fetchOne(String(uid), { source: true }, { uid: true });
+        handleMessage(msg.source).catch((err) => log(`error handling message ${uid}:`, err.message));
+      }
+    } while (checkAgain);
+  } catch (err) {
+    log('error checking inbox:', err.message);
+  } finally {
+    checking = false;
+  }
+}
+
+async function start() {
+  client = new ImapFlow({
+    ...config.imap,
+    auth: { user: config.email, pass: config.password },
+    logger: false,
+    autoIdleDelay: 1000, // go back to IDLE (instant push of new mail) 1s after each command
+  });
+  client.on('exists', () => checkInbox()); // fires immediately when a new email arrives (IMAP IDLE)
+  client.on('error', (err) => log('IMAP error:', err.message));
+
+  await client.connect();
+  await client.mailboxOpen('INBOX');
+  log(`listening on ${config.email} (allowed domains: ${config.allowedDomains.join(', ')})`);
+  await checkInbox();
+
+  const poll = setInterval(() => checkInbox(), config.pollIntervalMs);
+  await new Promise((resolve) => client.once('close', resolve));
+  clearInterval(poll);
+}
+
+async function main() {
+  await transporter.verify().catch((err) => {
+    console.error('SMTP login failed:', err.message);
+    process.exit(1);
+  });
+  for (;;) {
+    try {
+      await start();
+      log('IMAP connection closed, reconnecting in 5s');
+    } catch (err) {
+      log('IMAP connection failed, retrying in 5s:', err.message);
+    }
+    await new Promise((r) => setTimeout(r, 5000));
+  }
+}
+
+main();
