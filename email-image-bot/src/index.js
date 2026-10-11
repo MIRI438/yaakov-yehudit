@@ -1,10 +1,10 @@
-// Email bot: anyone who emails a Leonardo / Freepik / Magnific link gets the image back as an attachment.
+// Email bot: anyone who emails a Leonardo / Freepik / Magnific link gets the image / video back as an attachment.
 
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import nodemailer from 'nodemailer';
 import { config } from './config.js';
-import { findLinks, getImageFromLink } from './extract.js';
+import { findLinks, getMediaFromLink } from './extract.js';
 
 const log = (...args) => console.log(new Date().toISOString(), ...args);
 
@@ -61,17 +61,18 @@ async function handleMessage(source) {
   log(`message from ${sender}: ${links.length} link(s)`);
 
   const attachments = [];
+  const downloadLinks = []; // files too big to attach
   const failures = [];
   let totalBytes = 0;
 
-  const results = await Promise.allSettled(links.map((link) => getImageFromLink(link)));
+  const results = await Promise.allSettled(links.map((link) => getMediaFromLink(link)));
   results.forEach((r, i) => {
     if (r.status === 'rejected') {
       failures.push(`${links[i]}\n   ← ${r.reason?.message || r.reason}`);
       return;
     }
-    if (totalBytes + r.value.content.length > config.maxTotalBytes) {
-      failures.push(`${links[i]}\n   ← לא נכנס במייל (מגבלת גודל). קישור ישיר: ${r.value.sourceUrl}`);
+    if (r.value.tooLarge || totalBytes + r.value.content.length > config.maxTotalBytes) {
+      downloadLinks.push(r.value.sourceUrl);
       return;
     }
     totalBytes += r.value.content.length;
@@ -81,12 +82,16 @@ async function handleMessage(source) {
     attachments.push({ filename: name, content: r.value.content, contentType: r.value.contentType });
   });
 
-  let text = attachments.length
-    ? `שלום,\n\nמצורפות ${attachments.length} תמונות מהקישורים ששלחת.\n`
-    : 'שלום,\n\nלא הצלחתי להוריד תמונה מהקישורים ששלחת.\n';
+  let text = 'שלום,\n\n';
+  if (attachments.length === 1) text += 'מצורף הקובץ מהקישור ששלחת.\n';
+  if (attachments.length > 1) text += `מצורפים ${attachments.length} קבצים מהקישורים ששלחת.\n`;
+  if (downloadLinks.length) {
+    text += `\nקבצים שגדולים מדי לצירוף למייל, אפשר להוריד אותם כאן:\n${downloadLinks.map((u) => `• ${u}`).join('\n')}\n`;
+  }
+  if (!attachments.length && !downloadLinks.length) text += 'לא הצלחתי להוריד תמונה או סרטון מהקישורים ששלחת.\n';
   if (failures.length) text += `\nקישורים שלא הצליחו:\n${failures.map((f) => `• ${f}`).join('\n')}\n`;
 
-  const subject = mail.subject ? (/^re:/i.test(mail.subject) ? mail.subject : `Re: ${mail.subject}`) : 'התמונה שלך';
+  const subject = mail.subject ? (/^re:/i.test(mail.subject) ? mail.subject : `Re: ${mail.subject}`) : 'הקובץ שלך';
   await transporter.sendMail({
     from: config.email,
     to: replyTo,
@@ -97,7 +102,7 @@ async function handleMessage(source) {
     references: [...(mail.references ? [].concat(mail.references) : []), mail.messageId].filter(Boolean),
     headers: { 'Auto-Submitted': 'auto-replied' },
   });
-  log(`replied to ${sender}: ${attachments.length} image(s), ${failures.length} failure(s)`);
+  log(`replied to ${sender}: ${attachments.length} attached, ${downloadLinks.length} as link, ${failures.length} failed`);
 }
 
 // ---- mailbox watching ----

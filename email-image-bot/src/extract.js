@@ -1,4 +1,4 @@
-// Turns a Leonardo / Freepik / Magnific link into the actual image file.
+// Turns a Leonardo / Freepik / Magnific link into the actual image or video file.
 
 import dns from 'node:dns/promises';
 import net from 'node:net';
@@ -8,14 +8,25 @@ import { config } from './config.js';
 const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
 
-const IMAGE_EXT = /\.(jpe?g|png|webp|gif|avif)$/i;
+const MEDIA_EXT = /\.(jpe?g|png|webp|gif|avif|mp4|webm|mov|m4v)$/i;
+const VIDEO_EXT = /\.(mp4|webm|mov|m4v)$/i;
 const CONTENT_TYPE_EXT = {
   'image/jpeg': '.jpg',
   'image/png': '.png',
   'image/webp': '.webp',
   'image/gif': '.gif',
   'image/avif': '.avif',
+  'video/mp4': '.mp4',
+  'video/webm': '.webm',
+  'video/quicktime': '.mov',
 };
+
+const isMediaType = (type) => (type.startsWith('image/') && !type.includes('svg')) || type.startsWith('video/');
+const contentTypeOf = (res) => (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+
+// A link that lands on a login page means the image/video is private.
+const LOGIN_PAGE = /\/(login|log-in|signin|sign-in|signup|sign-up|auth)\b/i;
+const PRIVATE_MESSAGE = 'הקישור מוביל לדף התחברות: כנראה שהתמונה/הסרטון פרטיים. שלחו קישור שיתוף ציבורי';
 
 function parseHttpUrl(url) {
   try {
@@ -109,55 +120,66 @@ async function safeFetch(url, accept, anyPublicHost = false) {
   throw new Error('יותר מדי הפניות (redirects)');
 }
 
+class TooLargeError extends Error {}
+
 async function readLimited(res, limit) {
   const declared = Number(res.headers.get('content-length') || 0);
-  if (declared > limit) throw new Error('התמונה גדולה מדי');
+  if (declared > limit) {
+    res.body?.cancel().catch(() => {});
+    throw new TooLargeError('הקובץ גדול מדי');
+  }
   const chunks = [];
   let size = 0;
   for await (const chunk of res.body) {
     size += chunk.length;
-    if (size > limit) throw new Error('התמונה גדולה מדי');
+    if (size > limit) throw new TooLargeError('הקובץ גדול מדי');
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
 }
 
-/** Pulls candidate image URLs out of a page's HTML, best candidates first. */
-export function imageUrlsFromHtml(html, pageUrl) {
-  const candidates = [];
-  const add = (u) => {
+/** Pulls candidate image/video URLs out of a page's HTML, best candidates first. */
+export function mediaUrlsFromHtml(html, pageUrl) {
+  const videos = [];
+  const images = [];
+  const add = (list, u) => {
     if (!u) return;
     try {
       const abs = new URL(decodeEntities(u.replace(/\\u002F/gi, '/').replace(/\\\//g, '/')), pageUrl).toString();
-      if (parseHttpUrl(abs) && !candidates.includes(abs)) candidates.push(abs);
+      if (parseHttpUrl(abs) && !list.includes(abs)) list.push(abs);
     } catch {
       /* ignore malformed */
     }
   };
 
-  // 1. Social-preview meta tags: this is the main image of the page.
-  const metaNames = ['og:image:secure_url', 'og:image', 'twitter:image', 'twitter:image:src'];
+  // 1. Social-preview meta tags: the main video / image of the page.
+  const videoMeta = ['og:video:secure_url', 'og:video:url', 'og:video', 'twitter:player:stream'];
+  const imageMeta = ['og:image:secure_url', 'og:image', 'twitter:image', 'twitter:image:src'];
   for (const tag of html.match(/<meta\b[^>]*>/gi) || []) {
     const key = /(?:property|name)\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1]?.toLowerCase();
-    if (metaNames.includes(key)) add(/content\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1]);
+    const content = /content\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1];
+    if (videoMeta.includes(key)) add(videos, content);
+    if (imageMeta.includes(key)) add(images, content);
   }
-  candidates.sort((a, b) => rankMeta(a) - rankMeta(b));
+  // Prefer real files over generic site banners.
+  images.sort((a, b) => rankByExt(a) - rankByExt(b));
 
-  // 2. Direct image URLs in the page source / embedded JSON (e.g. cdn.leonardo.ai/...jpg).
+  // 2. Direct file URLs in the page source / embedded JSON (e.g. cdn.leonardo.ai/...jpg).
   const unescaped = html.replace(/\\u002F/gi, '/').replace(/\\\//g, '/');
-  for (const m of unescaped.matchAll(/https?:\/\/[^\s"'<>\\)]+?\.(?:jpe?g|png|webp|avif)(?:\?[^\s"'<>\\)]*)?/gi)) {
-    add(m[0]);
+  const fileUrl = /https?:\/\/[^\s"'<>\\)]+?\.(?:jpe?g|png|webp|avif|mp4|webm|mov|m4v)(?:\?[^\s"'<>\\)]*)?/gi;
+  for (const m of unescaped.matchAll(fileUrl)) {
+    add(VIDEO_EXT.test(new URL(m[0]).pathname) ? videos : images, m[0]);
   }
-  return candidates;
+  // A video's thumbnail is also an image on the page, so the video comes first.
+  return [...videos, ...images];
 }
 
-// Prefer real image files over generic site banners.
-function rankMeta(u) {
-  return IMAGE_EXT.test(new URL(u).pathname) ? 0 : 1;
+function rankByExt(u) {
+  return MEDIA_EXT.test(new URL(u).pathname) ? 0 : 1;
 }
 
 /** Renders the page in a headless browser (for pages built with JavaScript). */
-async function imageUrlsWithBrowser(pageUrl) {
+async function mediaUrlsWithBrowser(pageUrl) {
   if (!config.useBrowserFallback) return [];
   let chromium;
   try {
@@ -170,65 +192,90 @@ async function imageUrlsWithBrowser(pageUrl) {
   );
   try {
     const page = await browser.newPage({ userAgent: USER_AGENT });
-    // Every image the page downloads, with its size: the generated image is usually the biggest.
+    // Every image / video the page downloads, with its size: the generated one is usually the biggest.
     const loaded = [];
     page.on('response', async (response) => {
-      const type = response.headers()['content-type'] || '';
-      if (!type.startsWith('image/') || type.includes('svg')) return;
-      const size = await response.body().then((b) => b.length).catch(() => 0);
-      loaded.push({ url: response.url(), size });
+      const headers = response.headers();
+      const type = (headers['content-type'] || '').toLowerCase();
+      if (!isMediaType(type)) return;
+      const total = Number(/\/(\d+)$/.exec(headers['content-range'] || '')?.[1] || headers['content-length'] || 0);
+      const size = total || (await response.body().then((b) => b.length).catch(() => 0));
+      loaded.push({ url: response.url(), size, video: type.startsWith('video/') });
     });
     await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: config.fetchTimeoutMs });
     await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
+    if (LOGIN_PAGE.test(new URL(page.url()).pathname) && !LOGIN_PAGE.test(new URL(pageUrl).pathname)) {
+      throw new Error(PRIVATE_MESSAGE);
+    }
     const html = await page.content();
-    // Largest visible image on the page.
-    const biggest = await page.evaluate(() =>
-      [...document.images]
+    const onPage = await page.evaluate(() => ({
+      videos: [...document.querySelectorAll('video, video source')].map((v) => v.currentSrc || v.src),
+      // Largest visible image first.
+      images: [...document.images]
         .map((img) => ({ src: img.currentSrc || img.src, area: img.naturalWidth * img.naturalHeight }))
         .sort((a, b) => b.area - a.area)
         .map((i) => i.src),
-    );
-    const fromHtml = imageUrlsFromHtml(html, pageUrl);
-    const fromNetwork = loaded.sort((a, b) => b.size - a.size).map((i) => i.url);
-    return [...new Set([...fromHtml.slice(0, 1), ...fromNetwork.slice(0, 3), ...biggest, ...fromHtml.slice(1)])]
-      .filter((u) => parseHttpUrl(u));
+    }));
+    const fromHtml = mediaUrlsFromHtml(html, pageUrl);
+    const bySize = loaded.sort((a, b) => b.size - a.size);
+    const netVideos = bySize.filter((i) => i.video).map((i) => i.url);
+    const netImages = bySize.filter((i) => !i.video).map((i) => i.url);
+    return [...new Set([
+      ...onPage.videos, ...netVideos, ...fromHtml.slice(0, 1), ...netImages.slice(0, 3), ...onPage.images,
+      ...fromHtml.slice(1),
+    ])].filter((u) => parseHttpUrl(u)); // skips blob: streams
   } finally {
     await browser.close();
   }
 }
 
-async function downloadImage(url) {
-  const { res, finalUrl } = await safeFetch(url, 'image/avif,image/webp,image/*,*/*;q=0.8', true);
+async function downloadMedia(url) {
+  const { res, finalUrl } = await safeFetch(url, 'video/*,image/avif,image/webp,image/*,*/*;q=0.8', true);
   if (!res.ok) throw new Error(`השרת החזיר שגיאה ${res.status}`);
-  const type = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-  if (!type.startsWith('image/')) return null;
-  const content = await readLimited(res, config.maxImageBytes);
-  return { content, contentType: type, filename: filenameFor(finalUrl, type), sourceUrl: finalUrl };
+  const type = contentTypeOf(res);
+  if (!isMediaType(type)) {
+    res.body?.cancel().catch(() => {});
+    return null;
+  }
+  return toResult(res, finalUrl, type);
+}
+
+/** Reads the file; one that is too big for an email comes back as a link only. */
+async function toResult(res, finalUrl, type) {
+  const base = { contentType: type, filename: filenameFor(finalUrl, type), sourceUrl: finalUrl };
+  try {
+    return { ...base, content: await readLimited(res, config.maxFileBytes) };
+  } catch (err) {
+    if (err instanceof TooLargeError) return { ...base, tooLarge: true };
+    throw err;
+  }
 }
 
 function filenameFor(url, type) {
-  let base = path.basename(new URL(url).pathname) || 'image';
-  base = base.replace(/[^\w.\-]+/g, '_').slice(-80).replace(IMAGE_EXT, '') || 'image';
-  return base + (CONTENT_TYPE_EXT[type] || '.jpg');
+  let base = path.basename(new URL(url).pathname) || 'file';
+  base = base.replace(/[^\w.\-]+/g, '_').slice(-80).replace(MEDIA_EXT, '') || 'file';
+  return base + (CONTENT_TYPE_EXT[type] || (type.startsWith('video/') ? '.mp4' : '.jpg'));
 }
 
 /**
- * Main entry: given a link someone sent, returns { filename, content, contentType, sourceUrl }.
- * Throws an Error with a (Hebrew) user-facing message if no image could be found.
+ * Main entry: given a link someone sent, returns
+ * { filename, contentType, sourceUrl, content } or { ..., tooLarge: true } for a file too big to attach.
+ * Throws an Error with a (Hebrew) user-facing message if nothing could be found.
  */
-export async function getImageFromLink(link) {
-  // The link might already be a direct image.
-  const { res, finalUrl } = await safeFetch(link, 'text/html,application/xhtml+xml,image/*;q=0.9,*/*;q=0.8');
-  const type = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+export async function getMediaFromLink(link) {
+  // The link might already be a direct image / video.
+  const { res, finalUrl } = await safeFetch(link, 'text/html,application/xhtml+xml,video/*,image/*;q=0.9,*/*;q=0.8');
+  const type = contentTypeOf(res);
+  if (res.ok && isMediaType(type)) return toResult(res, finalUrl, type);
 
-  if (res.ok && type.startsWith('image/')) {
-    const content = await readLimited(res, config.maxImageBytes);
-    return { content, contentType: type, filename: filenameFor(finalUrl, type), sourceUrl: finalUrl };
+  if (LOGIN_PAGE.test(new URL(finalUrl).pathname) && !LOGIN_PAGE.test(new URL(link).pathname)) {
+    res.body?.cancel().catch(() => {});
+    throw new Error(PRIVATE_MESSAGE);
   }
 
   let candidates = [];
   if (res.ok && type.includes('html')) {
-    candidates = imageUrlsFromHtml(await readLimited(res, 5 * 1024 * 1024).then(String), finalUrl);
+    candidates = mediaUrlsFromHtml(String(await readLimited(res, 5 * 1024 * 1024)), finalUrl);
   } else {
     res.body?.cancel().catch(() => {});
   }
@@ -239,8 +286,8 @@ export async function getImageFromLink(link) {
       if (tried.has(url)) continue;
       tried.add(url);
       try {
-        const img = await downloadImage(url);
-        if (img) return img;
+        const media = await downloadMedia(url);
+        if (media) return media;
       } catch {
         /* try the next one */
       }
@@ -251,10 +298,15 @@ export async function getImageFromLink(link) {
   const direct = await tryCandidates(candidates.slice(0, 8));
   if (direct) return direct;
 
-  // Page blocked us, or the image only appears after JavaScript runs.
-  const rendered = await tryCandidates((await imageUrlsWithBrowser(finalUrl).catch(() => [])).slice(0, 8));
+  // Page blocked us, or the file only appears after JavaScript runs.
+  const fromBrowser = await mediaUrlsWithBrowser(finalUrl).catch((err) => {
+    if (err.message === PRIVATE_MESSAGE) throw err;
+    console.error('browser fallback failed:', err.message);
+    return [];
+  });
+  const rendered = await tryCandidates(fromBrowser.slice(0, 8));
   if (rendered) return rendered;
 
   if (!res.ok) throw new Error(`האתר חסם את הגישה או שהקישור לא תקין (קוד ${res.status})`);
-  throw new Error('לא נמצאה תמונה בקישור');
+  throw new Error('לא נמצאו תמונה או סרטון בקישור');
 }

@@ -37,8 +37,10 @@ export const config = {
   // Only links to these sites (or their subdomains) are handled.
   allowedDomains: list('ALLOWED_DOMAINS', 'leonardo.ai,freepik.com,freepik.es,b2bpic.net,magnific.com,magnific.ai'),
 
-  maxImageBytes: num('MAX_IMAGE_MB', 20) * 1024 * 1024,
-  maxTotalBytes: num('MAX_TOTAL_MB', 20) * 1024 * 1024,
+  // Gmail allows 25MB per email including encoding overhead, so ~18MB of actual files.
+  // Bigger files are sent as a download link instead of an attachment.
+  maxFileBytes: num('MAX_FILE_MB', 18) * 1024 * 1024,
+  maxTotalBytes: num('MAX_TOTAL_MB', 18) * 1024 * 1024,
   maxLinksPerEmail: num('MAX_LINKS_PER_EMAIL', 10),
   maxEmailsPerSenderPerHour: num('MAX_EMAILS_PER_SENDER_PER_HOUR', 30),
   fetchTimeoutMs: num('FETCH_TIMEOUT_SECONDS', 20) * 1000,
