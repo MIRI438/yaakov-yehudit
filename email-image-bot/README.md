@@ -64,6 +64,13 @@ docker run -d --restart=always --env-file .env email-image-bot
 בשירותי ענן מגדירים את `EMAIL_ADDRESS` ו-`EMAIL_PASSWORD` כמשתני סביבה (Environment Variables)
 במקום להעלות את קובץ `.env`. הבוט לא צריך כתובת אינטרנט או פורט פתוח, כי הוא רק מתחבר החוצה לג'ימייל.
 
+### שרת חינמי ב-Oracle Cloud (Always Free)
+
+הקובץ `deploy/oracle-cloud-init.sh` מתקין ומפעיל הכול לבד כשהשרת נוצר, בלי צורך להתחבר אליו.
+ממלאים בו את כתובת המייל ואת סיסמת האפליקציה, ומדביקים אותו ביצירת השרת תחת
+Advanced options → Management → Paste cloud-init script.
+בוחרים מערכת Ubuntu 24.04 ושרת Ampere מסוג VM.Standard.A1.Flex.
+
 ## הגדרות נוספות
 
 כל ההגדרות האופציונליות מופיעות ב-`.env.example`. למשל, כדי לתמוך באתר נוסף מוסיפים אותו ל-`ALLOWED_DOMAINS`.
