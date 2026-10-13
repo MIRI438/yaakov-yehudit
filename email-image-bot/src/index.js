@@ -1,4 +1,5 @@
-// Email bot: anyone who emails a Leonardo / Freepik / Magnific link gets the image / video back as an attachment.
+// Email bot: anyone who emails a link (Leonardo, Freepik, a shared ChatGPT / Gemini chat, any page...)
+// gets the images / videos behind it back as attachments.
 
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
@@ -66,15 +67,16 @@ async function handleMessage(source) {
       failures.push(`${links[i]}\n   ← ${r.reason?.message || r.reason}`);
       return;
     }
-    if (r.value.tooLarge || totalBytes + r.value.content.length > config.maxTotalBytes) {
-      downloadLinks.push(r.value.sourceUrl);
-      return;
+    for (const file of r.value) {
+      if (file.tooLarge || totalBytes + file.content.length > config.maxTotalBytes) {
+        downloadLinks.push(file.sourceUrl);
+        continue;
+      }
+      totalBytes += file.content.length;
+      let name = file.filename;
+      for (let n = 2; attachments.some((a) => a.filename === name); n++) name = `${n}_${file.filename}`;
+      attachments.push({ filename: name, content: file.content, contentType: file.contentType });
     }
-    totalBytes += r.value.content.length;
-    const name = attachments.some((a) => a.filename === r.value.filename)
-      ? `${i + 1}_${r.value.filename}`
-      : r.value.filename;
-    attachments.push({ filename: name, content: r.value.content, contentType: r.value.contentType });
   });
 
   let text = 'שלום,\n\n';

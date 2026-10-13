@@ -1,4 +1,5 @@
-// Turns a Leonardo / Freepik / Magnific link into the actual image or video file.
+// Turns a link someone emailed (Leonardo, Freepik, a shared ChatGPT / Gemini chat, any page...)
+// into the actual image / video files.
 
 import dns from 'node:dns/promises';
 import net from 'node:net';
@@ -37,13 +38,16 @@ function parseHttpUrl(url) {
   }
 }
 
-/** Is this link on one of the supported sites (Leonardo, Freepik, Magnific...)? */
+const hostIn = (host, domains) => domains.some((d) => host === d || host.endsWith('.' + d));
+
+/** Is this a link the bot handles (any site, or one of ALLOWED_DOMAINS)? */
 export function isAllowedUrl(url) {
   const u = parseHttpUrl(url);
   if (!u) return false;
-  const host = u.hostname.toLowerCase();
-  return config.allowedDomains.some((d) => host === d || host.endsWith('.' + d));
+  return config.anySite || hostIn(u.hostname.toLowerCase(), config.allowedDomains);
 }
+
+const isChatShare = (url) => hostIn(new URL(url).hostname.toLowerCase(), config.chatShareHosts);
 
 // Internal / private network addresses: never fetched (protects the server's own network).
 const privateRanges = new net.BlockList();
@@ -55,7 +59,17 @@ for (const [addr, prefix] of [['::', 127], ['fc00::', 7], ['fe80::', 10], ['ff00
   privateRanges.addSubnet(addr, prefix, 'ipv6');
 }
 
+const publicHostCache = new Map();
+
 async function isPublicHost(hostname) {
+  if (!publicHostCache.has(hostname)) {
+    publicHostCache.set(hostname, lookupIsPublic(hostname));
+    setTimeout(() => publicHostCache.delete(hostname), 10 * 60 * 1000).unref();
+  }
+  return publicHostCache.get(hostname);
+}
+
+async function lookupIsPublic(hostname) {
   try {
     const addrs = await dns.lookup(hostname.replace(/^\[|\]$/g, ''), { all: true });
     return addrs.length > 0 && addrs.every(({ address, family }) => {
@@ -69,25 +83,45 @@ async function isPublicHost(hostname) {
 }
 
 /**
- * Links people send must be on a supported site. The image those pages point to may live on
- * another CDN, so for images any public host is fine.
+ * Links must be handled sites (see isAllowedUrl); a page's image may live on another CDN, so for
+ * images any public host is fine. Nothing on a private / internal network is ever fetched, except
+ * domains explicitly listed in ALLOWED_DOMAINS.
  */
 async function checkUrl(url, anyPublicHost) {
   const u = parseHttpUrl(url);
   if (!u) throw new Error('קישור לא תקין');
-  if (isAllowedUrl(url)) return;
-  if (anyPublicHost && (await isPublicHost(u.hostname))) return;
+  const host = u.hostname.toLowerCase();
+  if (!config.anySite && hostIn(host, config.allowedDomains)) return;
+  if ((anyPublicHost || config.anySite) && (await isPublicHost(host))) return;
   throw new Error(`הקישור מפנה לאתר לא מורשה: ${u.hostname}`);
 }
 
-/** Finds all allowed links in the plain-text and HTML parts of an email. */
+/** Removes the quoted earlier messages from a reply, so links from old emails are not re-sent. */
+function stripQuotedText(text) {
+  const lines = String(text).split(/\r?\n/);
+  const cut = lines.findIndex((line) => {
+    const l = line.replace(/[\u200e\u200f\u202a-\u202e]/g, '').trim(); // Gmail wraps Hebrew in direction marks
+    return /^(On .+ wrote:|בתאריך .+:|-{2,}\s*Original Message\s*-{2,}|-{5,}\s*Forwarded message)/i.test(l);
+  });
+  return (cut >= 0 ? lines.slice(0, cut) : lines).filter((l) => !l.trimStart().startsWith('>')).join('\n');
+}
+
+function stripQuotedHtml(html) {
+  return String(html)
+    .replace(/<div[^>]*class=["'][^"']*gmail_quote[\s\S]*$/i, '')
+    .replace(/<blockquote[\s\S]*?<\/blockquote>/gi, '');
+}
+
+/** Finds the links in the new (non-quoted) part of an email. */
 export function findLinks(text = '', html = '') {
   const found = new Set();
   const urlRegex = /https?:\/\/[^\s<>"'()\[\]{}]+/gi;
   const hrefRegex = /href\s*=\s*["']([^"']+)["']/gi;
+  const ownText = stripQuotedText(text);
+  const ownHtml = stripQuotedHtml(html);
 
-  for (const m of String(html).matchAll(hrefRegex)) found.add(decodeEntities(m[1]));
-  for (const m of `${text}\n${html}`.matchAll(urlRegex)) found.add(decodeEntities(m[0]));
+  for (const m of ownHtml.matchAll(hrefRegex)) found.add(decodeEntities(m[1]));
+  for (const m of `${ownText}\n${ownHtml}`.matchAll(urlRegex)) found.add(decodeEntities(m[0]));
 
   const links = [];
   for (let link of found) {
@@ -95,6 +129,23 @@ export function findLinks(text = '', html = '') {
     if (isAllowedUrl(link) && !links.includes(link)) links.push(link);
   }
   return links.slice(0, config.maxLinksPerEmail);
+}
+
+/** Turns share links of file-hosting sites into direct downloads of the original file. */
+export function directDownloadUrl(link) {
+  const u = new URL(link);
+  const host = u.hostname.toLowerCase();
+  // Google Drive: /file/d/ID/view, /open?id=ID, /uc?id=ID
+  if (host === 'drive.google.com') {
+    const id = /\/file\/d\/([\w-]+)/.exec(u.pathname)?.[1] || u.searchParams.get('id');
+    if (id) return `https://drive.usercontent.google.com/download?id=${id}&export=download&confirm=t`;
+  }
+  // Dropbox: ?dl=0 shows a page, ?dl=1 downloads the file.
+  if (host === 'www.dropbox.com' || host === 'dropbox.com') {
+    u.searchParams.set('dl', '1');
+    return u.toString();
+  }
+  return link;
 }
 
 function decodeEntities(s) {
@@ -178,20 +229,48 @@ function rankByExt(u) {
   return MEDIA_EXT.test(new URL(u).pathname) ? 0 : 1;
 }
 
-/** Renders the page in a headless browser (for pages built with JavaScript). */
-async function mediaUrlsWithBrowser(pageUrl) {
-  if (!config.useBrowserFallback) return [];
+const BLOCKED_MESSAGE = 'האתר חסם את הבוט (בדיקת "האם אתה רובוט"), אי אפשר להוריד ממנו אוטומטית';
+
+/**
+ * Opens the page in a headless browser (for pages built with JavaScript) and calls fn(page, loaded)
+ * once it has loaded. `loaded` lists every image / video the page downloaded, with its size.
+ * Returns null when no browser is available.
+ */
+async function withBrowserPage(pageUrl, fn) {
+  if (!config.useBrowserFallback) return null;
   let chromium;
   try {
     ({ chromium } = await import('playwright'));
   } catch {
-    return []; // Playwright is optional
+    return null; // Playwright is optional
   }
+  // Each browser takes a few hundred MB of memory, so only a couple run at once.
+  while (openBrowsers >= MAX_BROWSERS) await new Promise((r) => setTimeout(r, 200));
+  openBrowsers++;
+  try {
+    return await renderPage(chromium, pageUrl, fn);
+  } finally {
+    openBrowsers--;
+  }
+}
+
+const MAX_BROWSERS = 2;
+let openBrowsers = 0;
+
+async function renderPage(chromium, pageUrl, fn) {
   const browser = await chromium.launch(
     process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {},
   );
   try {
-    const page = await browser.newPage({ userAgent: USER_AGENT });
+    const page = await browser.newPage({ userAgent: USER_AGENT, viewport: { width: 1280, height: 1600 } });
+    // The page itself must not reach the server's internal network either.
+    await page.route('**/*', async (route) => {
+      const u = parseHttpUrl(route.request().url());
+      if (!u) return route.continue(); // data:, blob:
+      const host = u.hostname.toLowerCase();
+      const ok = (!config.anySite && hostIn(host, config.allowedDomains)) || (await isPublicHost(host));
+      return ok ? route.continue() : route.abort();
+    });
     // Every image / video the page downloads, with its size: the generated one is usually the biggest.
     const loaded = [];
     page.on('response', async (response) => {
@@ -207,6 +286,39 @@ async function mediaUrlsWithBrowser(pageUrl) {
     if (LOGIN_PAGE.test(new URL(page.url()).pathname) && !LOGIN_PAGE.test(new URL(pageUrl).pathname)) {
       throw new Error(PRIVATE_MESSAGE);
     }
+    if (/just a moment|attention required|verify you are human/i.test(await page.title())) {
+      throw new Error(BLOCKED_MESSAGE);
+    }
+    // Scroll through the page so lazy-loaded images (e.g. further down a chat) load too.
+    await page.evaluate(async () => {
+      // Chat sites scroll an inner box, not the window, so both are scrolled.
+      const boxes = [...document.querySelectorAll('*')].filter(
+        (el) => el.scrollHeight > el.clientHeight + 50 && /(auto|scroll)/.test(getComputedStyle(el).overflowY),
+      );
+      for (let i = 0; i < 20; i++) {
+        let moved = false;
+        const y = window.scrollY;
+        window.scrollBy(0, window.innerHeight);
+        moved ||= window.scrollY !== y;
+        for (const el of boxes) {
+          const top = el.scrollTop;
+          el.scrollTop += el.clientHeight;
+          moved ||= el.scrollTop !== top;
+        }
+        await new Promise((r) => setTimeout(r, 250));
+        if (!moved) break;
+      }
+    });
+    await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+    return await fn(page, loaded);
+  } finally {
+    await browser.close();
+  }
+}
+
+/** Candidate URLs for the page's main image / video, found by rendering it. */
+async function mediaUrlsWithBrowser(pageUrl) {
+  const urls = await withBrowserPage(pageUrl, async (page, loaded) => {
     const html = await page.content();
     const onPage = await page.evaluate(() => ({
       videos: [...document.querySelectorAll('video, video source')].map((v) => v.currentSrc || v.src),
@@ -224,9 +336,64 @@ async function mediaUrlsWithBrowser(pageUrl) {
       ...onPage.videos, ...netVideos, ...fromHtml.slice(0, 1), ...netImages.slice(0, 3), ...onPage.images,
       ...fromHtml.slice(1),
     ])].filter((u) => parseHttpUrl(u)); // skips blob: streams
-  } finally {
-    await browser.close();
+  });
+  return urls || [];
+}
+
+/**
+ * For shared AI chats: every generated image / video in the conversation, in order.
+ * Small pictures (avatars, icons) are skipped.
+ */
+async function allMediaWithBrowser(pageUrl) {
+  return withBrowserPage(pageUrl, async (page) => {
+    const urls = await page.evaluate(() => {
+      const out = [];
+      for (const el of document.querySelectorAll('img, video')) {
+        if (el.tagName === 'VIDEO') {
+          const src = el.currentSrc || el.src || el.querySelector('source')?.src;
+          if (src) out.push(src);
+        } else if (el.naturalWidth >= 256 && el.naturalHeight >= 256) {
+          out.push(el.currentSrc || el.src);
+        }
+      }
+      return out;
+    });
+    const results = [];
+    const seen = new Set();
+    for (const url of urls) {
+      if (results.length >= config.maxFilesPerLink) break;
+      if (!parseHttpUrl(url) || seen.has(url)) continue; // skips blob: / data:
+      seen.add(url);
+      const media =
+        (await downloadMedia(fullSizeUrl(url)).catch(() => null)) ||
+        (await downloadMedia(url).catch(() => null)) ||
+        // Some chat sites only serve the file to the browser session that opened the chat.
+        (await downloadWithBrowser(page, url).catch(() => null));
+      if (media && !results.some((m) => m.sourceUrl === media.sourceUrl)) results.push(media);
+    }
+    return results;
+  });
+}
+
+// Google image URLs carry a size suffix (…=w512-h512); "=s0" asks for the original size.
+function fullSizeUrl(url) {
+  const u = new URL(url);
+  if (/(^|\.)googleusercontent\.com$/i.test(u.hostname) && /=[\w-]+$/.test(u.pathname)) {
+    u.pathname = u.pathname.replace(/=[\w-]+$/, '=s0');
+    return u.toString();
   }
+  return url;
+}
+
+async function downloadWithBrowser(page, url) {
+  await checkUrl(url, true);
+  // No redirects: each hop would otherwise skip the internal-network check.
+  const res = await page.context().request.get(url, { timeout: config.fetchTimeoutMs, maxRedirects: 0 });
+  const type = (res.headers()['content-type'] || '').split(';')[0].trim().toLowerCase();
+  if (!res.ok() || !isMediaType(type)) return null;
+  const base = { contentType: type, filename: filenameFor(url, type), sourceUrl: url };
+  const content = await res.body();
+  return content.length > config.maxFileBytes ? { ...base, tooLarge: true } : { ...base, content };
 }
 
 async function downloadMedia(url) {
@@ -257,12 +424,27 @@ function filenameFor(url, type) {
   return base + (CONTENT_TYPE_EXT[type] || (type.startsWith('video/') ? '.mp4' : '.jpg'));
 }
 
+const browserErrors = new Set([PRIVATE_MESSAGE, BLOCKED_MESSAGE]);
+
 /**
- * Main entry: given a link someone sent, returns
+ * Main entry: given a link someone sent, returns a list of files, each
  * { filename, contentType, sourceUrl, content } or { ..., tooLarge: true } for a file too big to attach.
  * Throws an Error with a (Hebrew) user-facing message if nothing could be found.
  */
 export async function getMediaFromLink(link) {
+  await checkUrl(link, false);
+  if (isChatShare(link)) {
+    const all = await allMediaWithBrowser(link);
+    if (all === null) throw new Error('צריך דפדפן כדי לפתוח שיחות משותפות, והוא לא מותקן בשרת');
+    if (!all.length) throw new Error('לא נמצאו תמונות או סרטונים בשיחה (ייתכן שהשיתוף לא כולל אותם)');
+    return all;
+  }
+  const one = await getMainMedia(directDownloadUrl(link));
+  return [one];
+}
+
+/** The main image / video behind a link (direct file, page meta tags, or the rendered page). */
+async function getMainMedia(link) {
   // The link might already be a direct image / video.
   const { res, finalUrl } = await safeFetch(link, 'text/html,application/xhtml+xml,video/*,image/*;q=0.9,*/*;q=0.8');
   const type = contentTypeOf(res);
@@ -300,7 +482,7 @@ export async function getMediaFromLink(link) {
 
   // Page blocked us, or the file only appears after JavaScript runs.
   const fromBrowser = await mediaUrlsWithBrowser(finalUrl).catch((err) => {
-    if (err.message === PRIVATE_MESSAGE) throw err;
+    if (browserErrors.has(err.message)) throw err;
     console.error('browser fallback failed:', err.message);
     return [];
   });
