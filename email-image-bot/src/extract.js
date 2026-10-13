@@ -190,7 +190,7 @@ async function readLimited(res, limit) {
 }
 
 /** Pulls candidate image/video URLs out of a page's HTML, best candidates first. */
-export function mediaUrlsFromHtml(html, pageUrl) {
+export function mediaUrlsFromHtml(html, pageUrl, { metaOnly = false } = {}) {
   const videos = [];
   const images = [];
   const add = (list, u) => {
@@ -215,6 +215,8 @@ export function mediaUrlsFromHtml(html, pageUrl) {
   // Prefer real files over generic site banners.
   images.sort((a, b) => rankByExt(a) - rankByExt(b));
 
+  if (metaOnly) return [...videos, ...images];
+
   // 2. Direct file URLs in the page source / embedded JSON (e.g. cdn.leonardo.ai/...jpg).
   const unescaped = html.replace(/\\u002F/gi, '/').replace(/\\\//g, '/');
   const fileUrl = /https?:\/\/[^\s"'<>\\)]+?\.(?:jpe?g|png|webp|avif|mp4|webm|mov|m4v)(?:\?[^\s"'<>\\)]*)?/gi;
@@ -224,6 +226,38 @@ export function mediaUrlsFromHtml(html, pageUrl) {
   // A video's thumbnail is also an image on the page, so the video comes first.
   return [...videos, ...images];
 }
+
+/** Only the page's own declared main media (og:video / og:image meta tags). */
+function metaMediaUrls(html, pageUrl) {
+  return mediaUrlsFromHtml(html, pageUrl, { metaOnly: true });
+}
+
+/**
+ * The identifiers in a link (e.g. "sSEWcE8l8e" in /app/creation/sSEWcE8l8e, the UUID at the end of a
+ * Leonardo link, "1234567" in a Freepik ..._1234567.htm). An image whose address contains one of them
+ * is the image the link points to, not some other picture on the same page.
+ */
+export function linkIds(link) {
+  const u = new URL(link);
+  const text = decodeURIComponent(u.pathname + ' ' + [...u.searchParams.values()].join(' '));
+  const ids = new Set();
+  for (const m of text.matchAll(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi)) ids.add(m[0]);
+  for (const token of text.replace(/[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}/gi, ' ').split(/[^A-Za-z0-9]+/)) {
+    if (/^\d{5,}$/.test(token)) ids.add(token); // numeric ids
+    else if (token.length >= 8 && /\d/.test(token) && /[a-z]/i.test(token)) ids.add(token); // e.g. sSEWcE8l8e
+  }
+  return [...ids].map((id) => id.toLowerCase());
+}
+
+const matchesId = (url, ids) => {
+  let u = url.toLowerCase();
+  try {
+    u = decodeURIComponent(u);
+  } catch {
+    /* keep as is */
+  }
+  return ids.some((id) => u.includes(id));
+};
 
 function rankByExt(u) {
   return MEDIA_EXT.test(new URL(u).pathname) ? 0 : 1;
@@ -236,7 +270,7 @@ const BLOCKED_MESSAGE = 'האתר חסם את הבוט (בדיקת "האם את�
  * once it has loaded. `loaded` lists every image / video the page downloaded, with its size.
  * Returns null when no browser is available.
  */
-async function withBrowserPage(pageUrl, fn) {
+async function withBrowserPage(pageUrl, fn, { scroll = false } = {}) {
   if (!config.useBrowserFallback) return null;
   let chromium;
   try {
@@ -248,7 +282,7 @@ async function withBrowserPage(pageUrl, fn) {
   while (openBrowsers >= MAX_BROWSERS) await new Promise((r) => setTimeout(r, 200));
   openBrowsers++;
   try {
-    return await renderPage(chromium, pageUrl, fn);
+    return await renderPage(chromium, pageUrl, fn, scroll);
   } finally {
     openBrowsers--;
   }
@@ -257,7 +291,7 @@ async function withBrowserPage(pageUrl, fn) {
 const MAX_BROWSERS = 2;
 let openBrowsers = 0;
 
-async function renderPage(chromium, pageUrl, fn) {
+async function renderPage(chromium, pageUrl, fn, scroll) {
   const browser = await chromium.launch(
     process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {},
   );
@@ -289,8 +323,9 @@ async function renderPage(chromium, pageUrl, fn) {
     if (/just a moment|attention required|verify you are human/i.test(await page.title())) {
       throw new Error(BLOCKED_MESSAGE);
     }
-    // Scroll through the page so lazy-loaded images (e.g. further down a chat) load too.
-    await page.evaluate(async () => {
+    // Chats: scroll through so lazy-loaded images further down load too. Not for single-image pages:
+    // scrolling there loads "more like this" pictures that are not the one the link points to.
+    if (scroll) await page.evaluate(async () => {
       // Chat sites scroll an inner box, not the window, so both are scrolled.
       const boxes = [...document.querySelectorAll('*')].filter(
         (el) => el.scrollHeight > el.clientHeight + 50 && /(auto|scroll)/.test(getComputedStyle(el).overflowY),
@@ -316,28 +351,42 @@ async function renderPage(chromium, pageUrl, fn) {
   }
 }
 
-/** Candidate URLs for the page's main image / video, found by rendering it. */
-async function mediaUrlsWithBrowser(pageUrl) {
+/**
+ * Candidate URLs for the page's main image / video, found by rendering it, best first:
+ * files whose address contains the link's id, then the page's declared main media, then what is
+ * shown biggest on the opening screen (the main picture, not thumbnails further down).
+ */
+async function mediaUrlsWithBrowser(pageUrl, ids) {
   const urls = await withBrowserPage(pageUrl, async (page, loaded) => {
     const html = await page.content();
-    const onPage = await page.evaluate(() => ({
-      videos: [...document.querySelectorAll('video, video source')].map((v) => v.currentSrc || v.src),
-      // Largest visible image first.
-      images: [...document.images]
-        .map((img) => ({ src: img.currentSrc || img.src, area: img.naturalWidth * img.naturalHeight }))
-        .sort((a, b) => b.area - a.area)
-        .map((i) => i.src),
-    }));
-    const fromHtml = mediaUrlsFromHtml(html, pageUrl);
-    const bySize = loaded.sort((a, b) => b.size - a.size);
-    const netVideos = bySize.filter((i) => i.video).map((i) => i.url);
-    const netImages = bySize.filter((i) => !i.video).map((i) => i.url);
-    return [...new Set([
-      ...onPage.videos, ...netVideos, ...fromHtml.slice(0, 1), ...netImages.slice(0, 3), ...onPage.images,
-      ...fromHtml.slice(1),
-    ])].filter((u) => parseHttpUrl(u)); // skips blob: streams
+    const onScreen = await page.evaluate(() => {
+      const visibleArea = (el) => {
+        const r = el.getBoundingClientRect();
+        const w = Math.min(r.right, innerWidth) - Math.max(r.left, 0);
+        const h = Math.min(r.bottom, innerHeight) - Math.max(r.top, 0);
+        return r.width >= 150 && r.height >= 150 && w > 0 && h > 0 ? w * h : 0;
+      };
+      const pick = (els, src) =>
+        els
+          .map((el) => ({ src: src(el), area: visibleArea(el) }))
+          .filter((i) => i.src && i.area > 0)
+          .sort((a, b) => b.area - a.area)
+          .map((i) => i.src);
+      return {
+        videos: pick([...document.querySelectorAll('video')], (v) => v.currentSrc || v.src || v.querySelector('source')?.src),
+        images: pick([...document.images], (img) => img.currentSrc || img.src),
+        all: [...document.querySelectorAll('img, video, video source')].map((el) => el.currentSrc || el.src),
+      };
+    });
+    const everything = [...mediaUrlsFromHtml(html, pageUrl), ...onScreen.all, ...loaded.map((i) => i.url)];
+    return [
+      ...everything.filter((u) => matchesId(u, ids)),
+      ...metaMediaUrls(html, pageUrl),
+      ...onScreen.videos,
+      ...onScreen.images.slice(0, 2),
+    ];
   });
-  return urls || [];
+  return [...new Set(urls || [])].filter((u) => parseHttpUrl(u)); // skips blob: streams
 }
 
 /**
@@ -348,7 +397,11 @@ async function allMediaWithBrowser(pageUrl) {
   return withBrowserPage(pageUrl, async (page) => {
     const urls = await page.evaluate(() => {
       const out = [];
+      // Pictures the user uploaded into the chat are not what they want back.
+      const userMessage =
+        '[data-message-author-role="user"], user-query, .user-query, [data-testid="user-message"], .font-user-message';
       for (const el of document.querySelectorAll('img, video')) {
+        if (el.closest(userMessage)) continue;
         if (el.tagName === 'VIDEO') {
           const src = el.currentSrc || el.src || el.querySelector('source')?.src;
           if (src) out.push(src);
@@ -372,7 +425,7 @@ async function allMediaWithBrowser(pageUrl) {
       if (media && !results.some((m) => m.sourceUrl === media.sourceUrl)) results.push(media);
     }
     return results;
-  });
+  }, { scroll: true });
 }
 
 // Google image URLs carry a size suffix (…=w512-h512); "=s0" asks for the original size.
@@ -455,9 +508,13 @@ async function getMainMedia(link) {
     throw new Error(PRIVATE_MESSAGE);
   }
 
-  let candidates = [];
+  const ids = linkIds(link);
+  let fromSource = [];
+  let fromMeta = [];
   if (res.ok && type.includes('html')) {
-    candidates = mediaUrlsFromHtml(String(await readLimited(res, 5 * 1024 * 1024)), finalUrl);
+    const html = String(await readLimited(res, 5 * 1024 * 1024));
+    fromSource = mediaUrlsFromHtml(html, finalUrl);
+    fromMeta = metaMediaUrls(html, finalUrl);
   } else {
     res.body?.cancel().catch(() => {});
   }
@@ -477,17 +534,22 @@ async function getMainMedia(link) {
     return null;
   };
 
-  const direct = await tryCandidates(candidates.slice(0, 8));
+  // 1. A file whose address contains the link's id, 2. the page's declared main image / video.
+  const direct = await tryCandidates([...fromSource.filter((u) => matchesId(u, ids)), ...fromMeta].slice(0, 8));
   if (direct) return direct;
 
-  // Page blocked us, or the file only appears after JavaScript runs.
-  const fromBrowser = await mediaUrlsWithBrowser(finalUrl).catch((err) => {
+  // 3. Page blocked us, or the file only appears after JavaScript runs.
+  const fromBrowser = await mediaUrlsWithBrowser(finalUrl, ids).catch((err) => {
     if (browserErrors.has(err.message)) throw err;
     console.error('browser fallback failed:', err.message);
     return [];
   });
   const rendered = await tryCandidates(fromBrowser.slice(0, 8));
   if (rendered) return rendered;
+
+  // 4. Last resort (no browser available): any other image / video named in the page source.
+  const other = await tryCandidates(fromSource.slice(0, 8));
+  if (other) return other;
 
   if (!res.ok) throw new Error(`האתר חסם את הגישה או שהקישור לא תקין (קוד ${res.status})`);
   throw new Error('לא נמצאו תמונה או סרטון בקישור');
