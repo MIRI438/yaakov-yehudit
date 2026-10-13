@@ -46,7 +46,7 @@ export const config = {
   // Shared AI chats: every image / video in the conversation is sent, not just one.
   chatShareHosts: list(
     'CHAT_SHARE_HOSTS',
-    'chatgpt.com,chat.openai.com,gemini.google.com,g.co,bard.google.com,claude.ai,copilot.microsoft.com,' +
+    'chatgpt.com,chat.openai.com,gemini.google.com,gemini.google,g.co,bard.google.com,claude.ai,copilot.microsoft.com,' +
       'grok.com,perplexity.ai,chat.deepseek.com,meta.ai,poe.com,chat.mistral.ai',
   ),
   maxFilesPerLink: num('MAX_FILES_PER_LINK', 10),
@@ -58,6 +58,8 @@ export const config = {
   maxLinksPerEmail: num('MAX_LINKS_PER_EMAIL', 10),
   maxEmailsPerSenderPerHour: num('MAX_EMAILS_PER_SENDER_PER_HOUR', 30),
   fetchTimeoutMs: num('FETCH_TIMEOUT_SECONDS', 20) * 1000,
+  // Downloading the file itself (videos can take a while).
+  downloadTimeoutMs: num('DOWNLOAD_TIMEOUT_SECONDS', 180) * 1000,
   // If installed, use a headless browser for pages that only render with JavaScript.
   useBrowserFallback: bool('USE_BROWSER_FALLBACK', true),
   // Safety net in case the IMAP IDLE push notification is missed.

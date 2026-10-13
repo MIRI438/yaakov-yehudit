@@ -5,12 +5,16 @@ import dns from 'node:dns/promises';
 import net from 'node:net';
 import path from 'node:path';
 import { config } from './config.js';
+import { createWriteStream } from 'node:fs';
+import { Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import { hasFfmpeg, shrinkVideoFile, streamToMp4, withTempDir } from './video.js';
 
 const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
 
-const MEDIA_EXT = /\.(jpe?g|png|webp|gif|avif|mp4|webm|mov|m4v)$/i;
-const VIDEO_EXT = /\.(mp4|webm|mov|m4v)$/i;
+const MEDIA_EXT = /\.(jpe?g|png|webp|gif|avif|mp4|webm|mov|m4v|m3u8)$/i;
+const VIDEO_EXT = /\.(mp4|webm|mov|m4v|m3u8)$/i;
 const CONTENT_TYPE_EXT = {
   'image/jpeg': '.jpg',
   'image/png': '.png',
@@ -23,6 +27,8 @@ const CONTENT_TYPE_EXT = {
 };
 
 const isMediaType = (type) => (type.startsWith('image/') && !type.includes('svg')) || type.startsWith('video/');
+// Streamed video: an HLS playlist pointing at many small pieces.
+const isStream = (type, url = '') => /mpegurl/i.test(type) || /\.m3u8($|\?)/i.test(url);
 const contentTypeOf = (res) => (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
 
 // A link that lands on a login page means the image/video is private.
@@ -153,13 +159,14 @@ function decodeEntities(s) {
 }
 
 /** fetch() that checks every redirect hop as well. */
-async function safeFetch(url, accept, anyPublicHost = false) {
+async function safeFetch(url, accept, anyPublicHost = false, timeoutMs = config.fetchTimeoutMs) {
   let current = url;
   for (let hop = 0; hop < 6; hop++) {
     await checkUrl(current, anyPublicHost);
     const res = await fetch(current, {
       redirect: 'manual',
-      signal: AbortSignal.timeout(config.fetchTimeoutMs),
+      // Covers reading the body too, so file downloads get a longer limit.
+      signal: AbortSignal.timeout(timeoutMs),
       headers: { 'User-Agent': USER_AGENT, Accept: accept, 'Accept-Language': 'en-US,en;q=0.9,he;q=0.8' },
     });
     if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
@@ -219,7 +226,7 @@ export function mediaUrlsFromHtml(html, pageUrl, { metaOnly = false } = {}) {
 
   // 2. Direct file URLs in the page source / embedded JSON (e.g. cdn.leonardo.ai/...jpg).
   const unescaped = html.replace(/\\u002F/gi, '/').replace(/\\\//g, '/');
-  const fileUrl = /https?:\/\/[^\s"'<>\\)]+?\.(?:jpe?g|png|webp|avif|mp4|webm|mov|m4v)(?:\?[^\s"'<>\\)]*)?/gi;
+  const fileUrl = /https?:\/\/[^\s"'<>\\)]+?\.(?:jpe?g|png|webp|avif|mp4|webm|mov|m4v|m3u8)(?:\?[^\s"'<>\\)]*)?/gi;
   for (const m of unescaped.matchAll(fileUrl)) {
     add(VIDEO_EXT.test(new URL(m[0]).pathname) ? videos : images, m[0]);
   }
@@ -310,7 +317,10 @@ async function renderPage(chromium, pageUrl, fn, scroll) {
     page.on('response', async (response) => {
       const headers = response.headers();
       const type = (headers['content-type'] || '').toLowerCase();
+      if (isStream(type, response.url())) return loaded.push({ url: response.url(), size: Infinity, video: true });
       if (!isMediaType(type)) return;
+      // Pieces of a stream are not whole videos.
+      if (/mp2t|iso\.segment/.test(type) || /\.(ts|m4s)($|\?)/i.test(response.url())) return;
       const total = Number(/\/(\d+)$/.exec(headers['content-range'] || '')?.[1] || headers['content-length'] || 0);
       const size = total || (await response.body().then((b) => b.length).catch(() => 0));
       loaded.push({ url: response.url(), size, video: type.startsWith('video/') });
@@ -375,14 +385,21 @@ async function mediaUrlsWithBrowser(pageUrl, ids) {
       return {
         videos: pick([...document.querySelectorAll('video')], (v) => v.currentSrc || v.src || v.querySelector('source')?.src),
         images: pick([...document.images], (img) => img.currentSrc || img.src),
+        // A prominent player whose source is a blob: stream (the file is then found in the network log).
+        blobVideo: [...document.querySelectorAll('video')].some(
+          (v) => /^blob:/.test(v.currentSrc || v.src) && visibleArea(v) > 0,
+        ),
         all: [...document.querySelectorAll('img, video, video source')].map((el) => el.currentSrc || el.src),
       };
     });
     const everything = [...mediaUrlsFromHtml(html, pageUrl), ...onScreen.all, ...loaded.map((i) => i.url)];
+    // Videos the page loaded in the background (often the real file behind a blob: player), biggest first.
+    const netVideos = loaded.filter((i) => i.video).sort((a, b) => b.size - a.size).map((i) => i.url);
     return [
       ...everything.filter((u) => matchesId(u, ids)),
       ...metaMediaUrls(html, pageUrl),
       ...onScreen.videos,
+      ...(onScreen.videos.length || onScreen.blobVideo ? netVideos.slice(0, 2) : []),
       ...onScreen.images.slice(0, 2),
     ];
   });
@@ -394,7 +411,20 @@ async function mediaUrlsWithBrowser(pageUrl, ids) {
  * Small pictures (avatars, icons) are skipped.
  */
 async function allMediaWithBrowser(pageUrl) {
-  return withBrowserPage(pageUrl, async (page) => {
+  return withBrowserPage(pageUrl, async (page, loaded) => {
+    // Some chats show a video only as a poster with a play button until it is clicked.
+    const played = await page.evaluate(() => {
+      const buttons = [...document.querySelectorAll('button, [role="button"]')].filter((b) =>
+        /(^|\b)(play|הפעל|הפעלה)/i.test(b.getAttribute('aria-label') || b.title || ''),
+      );
+      buttons.slice(0, 10).forEach((b) => b.click());
+      document.querySelectorAll('video').forEach((v) => {
+        v.muted = true;
+        v.play?.().catch(() => {});
+      });
+      return buttons.length;
+    });
+    if (played) await page.waitForTimeout(2000);
     const urls = await page.evaluate(() => {
       const out = [];
       // Pictures the user uploaded into the chat are not what they want back.
@@ -411,6 +441,10 @@ async function allMediaWithBrowser(pageUrl) {
       }
       return out;
     });
+    // A player fed by a blob: stream: its real file / playlist is in the network log.
+    if (urls.some((u) => /^blob:/.test(u))) {
+      urls.push(...loaded.filter((i) => i.video).sort((a, b) => b.size - a.size).map((i) => i.url));
+    }
     const results = [];
     const seen = new Set();
     for (const url of urls) {
@@ -450,9 +484,15 @@ async function downloadWithBrowser(page, url) {
 }
 
 async function downloadMedia(url) {
-  const { res, finalUrl } = await safeFetch(url, 'video/*,image/avif,image/webp,image/*,*/*;q=0.8', true);
+  const { res, finalUrl } = await safeFetch(
+    url, 'video/*,image/avif,image/webp,image/*,*/*;q=0.8', true, config.downloadTimeoutMs,
+  );
   if (!res.ok) throw new Error(`השרת החזיר שגיאה ${res.status}`);
   const type = contentTypeOf(res);
+  if (isStream(type, finalUrl)) {
+    res.body?.cancel().catch(() => {});
+    return streamResult(finalUrl);
+  }
   if (!isMediaType(type)) {
     res.body?.cancel().catch(() => {});
     return null;
@@ -460,15 +500,47 @@ async function downloadMedia(url) {
   return toResult(res, finalUrl, type);
 }
 
-/** Reads the file; one that is too big for an email comes back as a link only. */
+/** Reads the file. A video too big for an email is compressed to fit; anything else too big is sent as a link. */
 async function toResult(res, finalUrl, type) {
   const base = { contentType: type, filename: filenameFor(finalUrl, type), sourceUrl: finalUrl };
   try {
     return { ...base, content: await readLimited(res, config.maxFileBytes) };
   } catch (err) {
-    if (err instanceof TooLargeError) return { ...base, tooLarge: true };
-    throw err;
+    if (!(err instanceof TooLargeError)) throw err;
+    if (type.startsWith('video/')) {
+      const small = await shrinkVideoUrl(finalUrl).catch((e) => console.error('video shrink failed:', e.message));
+      if (small) return { ...base, contentType: 'video/mp4', filename: filenameFor(finalUrl, 'video/mp4'), content: small };
+    }
+    return { ...base, tooLarge: true };
   }
+}
+
+const MAX_VIDEO_DOWNLOAD = 500 * 1024 * 1024;
+
+/** Downloads a video too big for an email to a temporary file and compresses it to fit. */
+async function shrinkVideoUrl(url) {
+  if (!(await hasFfmpeg())) return null;
+  return withTempDir(async (dir) => {
+    const { res } = await safeFetch(url, 'video/*,*/*;q=0.8', true, config.downloadTimeoutMs);
+    if (!res.ok) return null;
+    let size = 0;
+    const limit = new Transform({
+      transform(chunk, _enc, done) {
+        size += chunk.length;
+        done(size > MAX_VIDEO_DOWNLOAD ? new Error('video larger than 500MB') : null, chunk);
+      },
+    });
+    const file = path.join(dir, 'original');
+    await pipeline(Readable.fromWeb(res.body), limit, createWriteStream(file));
+    return shrinkVideoFile(file);
+  });
+}
+
+/** A streamed (HLS) video saved as one MP4 file. */
+async function streamResult(url) {
+  const saved = await streamToMp4(url);
+  const base = { contentType: 'video/mp4', filename: filenameFor(url, 'video/mp4'), sourceUrl: url };
+  return saved ? { ...base, content: saved.content } : null;
 }
 
 function filenameFor(url, type) {
@@ -499,9 +571,17 @@ export async function getMediaFromLink(link) {
 /** The main image / video behind a link (direct file, page meta tags, or the rendered page). */
 async function getMainMedia(link) {
   // The link might already be a direct image / video.
-  const { res, finalUrl } = await safeFetch(link, 'text/html,application/xhtml+xml,video/*,image/*;q=0.9,*/*;q=0.8');
+  const { res, finalUrl } = await safeFetch(
+    link, 'text/html,application/xhtml+xml,video/*,image/*;q=0.9,*/*;q=0.8', false, config.downloadTimeoutMs,
+  );
   const type = contentTypeOf(res);
   if (res.ok && isMediaType(type)) return toResult(res, finalUrl, type);
+  if (res.ok && isStream(type, finalUrl)) {
+    res.body?.cancel().catch(() => {});
+    const stream = await streamResult(finalUrl);
+    if (stream) return stream;
+    throw new Error('לא הצלחתי לשמור את הסרטון המוזרם (stream)');
+  }
 
   if (LOGIN_PAGE.test(new URL(finalUrl).pathname) && !LOGIN_PAGE.test(new URL(link).pathname)) {
     res.body?.cancel().catch(() => {});
