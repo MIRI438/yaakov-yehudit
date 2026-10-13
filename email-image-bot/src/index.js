@@ -59,12 +59,18 @@ async function handleMessage(source) {
   const attachments = [];
   const downloadLinks = []; // files too big to attach
   const failures = [];
+  const screenshots = [];
   let totalBytes = 0;
 
   const results = await Promise.allSettled(links.map((link) => getMediaFromLink(link)));
   results.forEach((r, i) => {
     if (r.status === 'rejected') {
       failures.push(`${links[i]}\n   ← ${r.reason?.message || r.reason}`);
+      log(`link failed: ${links[i]} | ${r.reason?.message || r.reason}${r.reason?.diagnostics ? ` | ${r.reason.diagnostics}` : ''}`);
+      // A picture of the page as the bot saw it explains most failures (blocked, login, consent...).
+      if (r.reason?.screenshot) {
+        screenshots.push({ filename: `what-the-bot-saw-${i + 1}.png`, content: r.reason.screenshot, contentType: 'image/png' });
+      }
       return;
     }
     for (const file of r.value) {
@@ -87,13 +93,14 @@ async function handleMessage(source) {
   }
   if (!attachments.length && !downloadLinks.length) text += 'לא הצלחתי להוריד תמונה או סרטון מהקישורים ששלחת.\n';
   if (failures.length) text += `\nקישורים שלא הצליחו:\n${failures.map((f) => `• ${f}`).join('\n')}\n`;
+  if (screenshots.length) text += '\nמצורף צילום מסך של הדף כפי שהבוט ראה אותו.\n';
 
   const subject = mail.subject ? (/^re:/i.test(mail.subject) ? mail.subject : `Re: ${mail.subject}`) : 'הקובץ שלך';
   await sendReply({
     to: replyTo,
     subject,
     text,
-    attachments,
+    attachments: [...attachments, ...screenshots],
     inReplyTo: mail.messageId,
     references: [...(mail.references ? [].concat(mail.references) : []), mail.messageId].filter(Boolean),
   });

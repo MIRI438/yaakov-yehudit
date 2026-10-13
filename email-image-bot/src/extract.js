@@ -6,6 +6,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { config } from './config.js';
 import { createWriteStream } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { hasFfmpeg, shrinkVideoFile, streamToMp4, withTempDir } from './video.js';
@@ -330,7 +331,18 @@ async function renderPage(chromium, pageUrl, fn, scroll) {
     if (LOGIN_PAGE.test(new URL(page.url()).pathname) && !LOGIN_PAGE.test(new URL(pageUrl).pathname)) {
       throw new Error(PRIVATE_MESSAGE);
     }
-    if (/just a moment|attention required|verify you are human/i.test(await page.title())) {
+    // Google's cookie-consent screen (shown to visitors without cookies): accept and continue.
+    if (/^consent\./.test(new URL(page.url()).hostname)) {
+      const button = page.locator('button, input[type=submit]').filter({
+        hasText: /reject all|accept all|דחיית הכול|דחה הכול|אישור הכול|קבל הכול/i,
+      });
+      if (await button.count()) {
+        await Promise.all([page.waitForNavigation({ timeout: 15000 }).catch(() => {}), button.first().click()]);
+        await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
+      }
+    }
+    if (/\/sorry\//.test(new URL(page.url()).pathname) ||
+        /just a moment|attention required|verify you are human|unusual traffic/i.test(await page.title())) {
       throw new Error(BLOCKED_MESSAGE);
     }
     // Chats: scroll through so lazy-loaded images further down load too. Not for single-image pages:
@@ -356,9 +368,28 @@ async function renderPage(chromium, pageUrl, fn, scroll) {
     });
     await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
     return await fn(page, loaded);
+  } catch (err) {
+    // What the bot saw, for the reply email and the log.
+    const page = browser.contexts()[0]?.pages()[0];
+    if (page) {
+      err.screenshot ??= await page.screenshot({ timeout: 10000 }).catch(() => null);
+      err.diagnostics ??= await describePage(page).catch(() => '');
+    }
+    throw err;
   } finally {
     await browser.close();
   }
+}
+
+async function describePage(page) {
+  const info = await page.evaluate(() => ({
+    title: document.title,
+    images: document.images.length,
+    bigImages: [...document.images].filter((i) => i.naturalWidth >= 256 && i.naturalHeight >= 256).length,
+    videos: [...document.querySelectorAll('video')].map((v) => (v.currentSrc || v.src || '(no src)').slice(0, 120)),
+  }));
+  return `page=${page.url().slice(0, 150)} title="${info.title.slice(0, 80)}" images=${info.images} ` +
+    `big=${info.bigImages} videos=${JSON.stringify(info.videos.slice(0, 5))}`;
 }
 
 /**
@@ -447,16 +478,27 @@ async function allMediaWithBrowser(pageUrl) {
     }
     const results = [];
     const seen = new Set();
+    const problems = [];
+    const attempt = (fn, url) =>
+      fn(url).catch((err) => {
+        problems.push(`${url.slice(0, 100)}: ${err.message}`);
+        return null;
+      });
     for (const url of urls) {
       if (results.length >= config.maxFilesPerLink) break;
       if (!parseHttpUrl(url) || seen.has(url)) continue; // skips blob: / data:
       seen.add(url);
       const media =
-        (await downloadMedia(fullSizeUrl(url)).catch(() => null)) ||
-        (await downloadMedia(url).catch(() => null)) ||
+        (await attempt(downloadMedia, fullSizeUrl(url))) ||
+        (await attempt(downloadMedia, url)) ||
         // Some chat sites only serve the file to the browser session that opened the chat.
-        (await downloadWithBrowser(page, url).catch(() => null));
+        (await attempt((u) => downloadWithBrowser(page, u), url));
       if (media && !results.some((m) => m.sourceUrl === media.sourceUrl)) results.push(media);
+    }
+    if (!results.length) {
+      const err = new Error('לא נמצאו תמונות או סרטונים שאפשר להוריד בשיחה (מצורף צילום של מה שהבוט ראה)');
+      err.diagnostics = `${await describePage(page)} candidates=${urls.length} failures=${JSON.stringify(problems.slice(0, 6))}`;
+      throw err;
     }
     return results;
   }, { scroll: true });
@@ -473,14 +515,33 @@ function fullSizeUrl(url) {
 }
 
 async function downloadWithBrowser(page, url) {
-  await checkUrl(url, true);
-  // No redirects: each hop would otherwise skip the internal-network check.
-  const res = await page.context().request.get(url, { timeout: config.fetchTimeoutMs, maxRedirects: 0 });
+  // Redirects are followed one hop at a time so every hop gets the internal-network check
+  // (Google's download links redirect to the actual file).
+  let current = url;
+  let res;
+  for (let hop = 0; hop < 6; hop++) {
+    await checkUrl(current, true);
+    res = await page.context().request.get(current, { timeout: config.downloadTimeoutMs, maxRedirects: 0 });
+    const location = res.headers().location;
+    if (res.status() < 300 || res.status() >= 400 || !location) break;
+    current = new URL(location, current).toString();
+  }
   const type = (res.headers()['content-type'] || '').split(';')[0].trim().toLowerCase();
-  if (!res.ok() || !isMediaType(type)) return null;
-  const base = { contentType: type, filename: filenameFor(url, type), sourceUrl: url };
+  if (!res.ok()) throw new Error(`browser download: HTTP ${res.status()}`);
+  if (isStream(type, current)) return streamResult(current);
+  if (!isMediaType(type)) throw new Error(`browser download: not a file (${type || 'no type'})`);
+  const base = { contentType: type, filename: filenameFor(current, type), sourceUrl: current };
   const content = await res.body();
-  return content.length > config.maxFileBytes ? { ...base, tooLarge: true } : { ...base, content };
+  if (content.length <= config.maxFileBytes) return { ...base, content };
+  if (type.startsWith('video/')) {
+    const small = await withTempDir(async (dir) => {
+      const file = path.join(dir, 'original');
+      await writeFile(file, content);
+      return shrinkVideoFile(file);
+    });
+    if (small) return { ...base, contentType: 'video/mp4', filename: filenameFor(current, 'video/mp4'), content: small };
+  }
+  return { ...base, tooLarge: true };
 }
 
 async function downloadMedia(url) {
@@ -561,7 +622,6 @@ export async function getMediaFromLink(link) {
   if (isChatShare(link)) {
     const all = await allMediaWithBrowser(link);
     if (all === null) throw new Error('צריך דפדפן כדי לפתוח שיחות משותפות, והוא לא מותקן בשרת');
-    if (!all.length) throw new Error('לא נמצאו תמונות או סרטונים בשיחה (ייתכן שהשיתוף לא כולל אותם)');
     return all;
   }
   const one = await getMainMedia(directDownloadUrl(link));
