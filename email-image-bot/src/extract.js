@@ -457,7 +457,7 @@ async function allMediaWithBrowser(pageUrl) {
     });
     if (played) await page.waitForTimeout(2000);
     // Every generated image / video in the chat, also inside shadow DOM. Each gets a marker so it can be
-    // found again (to read a blob: from the page, or to photograph the element as a last resort).
+    // found again (to read a blob: from the page, or export the decoded picture at full resolution).
     const found = await page.evaluate(() => {
       const deepAll = (root, selector, out = []) => {
         out.push(...root.querySelectorAll(selector));
@@ -506,14 +506,15 @@ async function allMediaWithBrowser(pageUrl) {
         // The file only exists inside the page (e.g. Gemini shows generated images as blob:).
         media = await attempt(() => readFromPage(page, item), item.src);
       }
-      // Last resort for a picture: photograph it as shown on the page.
+      // The page may have already freed the blob: (common right after showing it). The picture itself is still
+      // decoded in the page, so export it at its original resolution, pixel for pixel (not a screenshot).
       if (!media && !item.video && item.idx !== undefined) {
-        media = await attempt(() => photographElement(page, item.idx), `screenshot #${item.idx}`);
+        media = await attempt(() => exportFullImage(page, item.idx), `export #${item.idx}`);
       }
       if (media && !results.some((m) => m.sourceUrl === media.sourceUrl)) results.push(media);
     }
     if (!results.length) {
-      const err = new Error('לא נמצאו תמונות או סרטונים שאפשר להוריד בשיחה (מצורף צילום של מה שהבוט ראה)');
+      const err = new Error('לא נמצאו תמונות או סרטונים שאפשר להוריד בשיחה');
       err.diagnostics = `${await describePage(page)} candidates=${items.length} failures=${JSON.stringify(problems.slice(0, 6))}`;
       throw err;
     }
@@ -534,8 +535,16 @@ function fullSizeUrl(url) {
 /** Reads a blob: / data: image or video straight out of the page that shows it. */
 async function readFromPage(page, item) {
   const data = await page.evaluate(async (idx) => {
-    const el = document.querySelector(`[data-bot-idx="${idx}"]`) ||
-      [...document.querySelectorAll('*')].map((e) => e.shadowRoot?.querySelector(`[data-bot-idx="${idx}"]`)).find(Boolean);
+    const find = (root) => {
+      const hit = root.querySelector(`[data-bot-idx="${idx}"]`);
+      if (hit) return hit;
+      for (const e of root.querySelectorAll('*')) {
+        const inner = e.shadowRoot && find(e.shadowRoot);
+        if (inner) return inner;
+      }
+      return null;
+    };
+    const el = find(document);
     const blob = await (await fetch(el.currentSrc || el.src)).blob();
     const bytes = new Uint8Array(await blob.arrayBuffer());
     let binary = '';
@@ -563,10 +572,38 @@ async function fitInEmail(base, content) {
   return { ...base, tooLarge: true };
 }
 
-/** A PNG of the picture exactly as the page shows it. */
-async function photographElement(page, idx) {
-  const content = await page.locator(`[data-bot-idx="${idx}"]`).first().screenshot({ timeout: 10000 });
-  return { contentType: 'image/png', filename: `image-${idx + 1}.png`, sourceUrl: `screenshot:${idx}`, content };
+/**
+ * The picture at its original resolution (naturalWidth x naturalHeight), losslessly as PNG, taken from the
+ * decoded image in the page. Only works for pictures the page itself owns (blob: / data: / same site).
+ */
+async function exportFullImage(page, idx) {
+  const data = await page.evaluate(async (i) => {
+    const find = (root) => {
+      const hit = root.querySelector(`[data-bot-idx="${i}"]`);
+      if (hit) return hit;
+      for (const el of root.querySelectorAll('*')) {
+        const inner = el.shadowRoot && find(el.shadowRoot);
+        if (inner) return inner;
+      }
+      return null;
+    };
+    const img = find(document);
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    canvas.getContext('2d').drawImage(img, 0, 0);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let binary = '';
+    for (let k = 0; k < bytes.length; k += 0x8000) binary += String.fromCharCode(...bytes.subarray(k, k + 0x8000));
+    return { base64: btoa(binary), width: img.naturalWidth, height: img.naturalHeight };
+  }, idx);
+  return {
+    contentType: 'image/png',
+    filename: `image-${idx + 1}.png`,
+    sourceUrl: `page:image-${idx + 1}`,
+    content: Buffer.from(data.base64, 'base64'),
+  };
 }
 
 async function downloadWithBrowser(page, url) {

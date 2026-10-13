@@ -60,6 +60,8 @@ export const config = {
   fetchTimeoutMs: num('FETCH_TIMEOUT_SECONDS', 20) * 1000,
   // Downloading the file itself (videos can take a while).
   downloadTimeoutMs: num('DOWNLOAD_TIMEOUT_SECONDS', 180) * 1000,
+  // Troubleshooting: attach a screenshot of a page that failed to the reply.
+  debugScreenshots: bool('DEBUG_SCREENSHOTS', false),
   // If installed, use a headless browser for pages that only render with JavaScript.
   useBrowserFallback: bool('USE_BROWSER_FALLBACK', true),
   // Safety net in case the IMAP IDLE push notification is missed.

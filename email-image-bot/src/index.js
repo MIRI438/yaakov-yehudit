@@ -69,7 +69,7 @@ async function handleMessage(source) {
       failures.push(`${links[i]}\n   ← ${r.reason?.message || r.reason}`);
       log(`link failed: ${links[i]} | ${r.reason?.message || r.reason}${r.reason?.diagnostics ? ` | ${r.reason.diagnostics}` : ''}`);
       // A picture of the page as the bot saw it explains most failures (blocked, login, consent...).
-      if (r.reason?.screenshot) {
+      if (config.debugScreenshots && r.reason?.screenshot) {
         screenshots.push({ filename: `what-the-bot-saw-${i + 1}.png`, content: r.reason.screenshot, contentType: 'image/png' });
       }
       return;
