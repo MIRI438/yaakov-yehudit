@@ -2,16 +2,11 @@
 
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
-import nodemailer from 'nodemailer';
 import { config } from './config.js';
 import { findLinks, getMediaFromLink } from './extract.js';
+import { sendReply, verifySending } from './mailer.js';
 
 const log = (...args) => console.log(new Date().toISOString(), ...args);
-
-const transporter = nodemailer.createTransport({
-  ...config.smtp,
-  auth: { user: config.email, pass: config.password },
-});
 
 // ---- protection against loops and abuse ----
 
@@ -92,15 +87,13 @@ async function handleMessage(source) {
   if (failures.length) text += `\nקישורים שלא הצליחו:\n${failures.map((f) => `• ${f}`).join('\n')}\n`;
 
   const subject = mail.subject ? (/^re:/i.test(mail.subject) ? mail.subject : `Re: ${mail.subject}`) : 'הקובץ שלך';
-  await transporter.sendMail({
-    from: config.email,
+  await sendReply({
     to: replyTo,
     subject,
     text,
     attachments,
     inReplyTo: mail.messageId,
     references: [...(mail.references ? [].concat(mail.references) : []), mail.messageId].filter(Boolean),
-    headers: { 'Auto-Submitted': 'auto-replied' },
   });
   log(`replied to ${sender}: ${attachments.length} attached, ${downloadLinks.length} as link, ${failures.length} failed`);
 }
@@ -145,6 +138,7 @@ async function start() {
   client.on('exists', () => checkInbox()); // fires immediately when a new email arrives (IMAP IDLE)
   client.on('error', (err) => log('IMAP error:', err.message));
 
+  log(`connecting to ${config.imap.host}:${config.imap.port} (IMAP)...`);
   await client.connect();
   await client.mailboxOpen('INBOX');
   log(`listening on ${config.email} (allowed domains: ${config.allowedDomains.join(', ')})`);
@@ -156,10 +150,15 @@ async function start() {
 }
 
 async function main() {
-  await transporter.verify().catch((err) => {
-    console.error('SMTP login failed:', err.message);
+  log(`checking that replies can be sent (${config.sendScriptUrl ? 'Apps Script' : 'SMTP'})...`);
+  const via = await verifySending().catch((err) => {
+    console.error('Sending check failed:', err.message);
+    if (!config.sendScriptUrl) {
+      console.error('If this host blocks SMTP ports (e.g. Railway), set SEND_SCRIPT_URL - see README.');
+    }
     process.exit(1);
   });
+  log(`replies will be sent via ${via}`);
   for (;;) {
     try {
       await start();

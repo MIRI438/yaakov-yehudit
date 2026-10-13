@@ -34,6 +34,11 @@ export const config = {
     secure: bool('SMTP_SECURE', true),
   },
 
+  // Optional: send replies over HTTPS through deploy/gmail-send-relay.gs instead of SMTP
+  // (for hosts that block SMTP ports, like Railway).
+  sendScriptUrl: process.env.SEND_SCRIPT_URL || '',
+  sendScriptSecret: process.env.SEND_SCRIPT_SECRET || '',
+
   // Only links to these sites (or their subdomains) are handled.
   allowedDomains: list('ALLOWED_DOMAINS', 'leonardo.ai,freepik.com,freepik.es,b2bpic.net,magnific.com,magnific.ai'),
 

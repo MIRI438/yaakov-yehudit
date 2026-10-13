@@ -64,6 +64,24 @@ docker run -d --restart=always --env-file .env email-image-bot
 בשירותי ענן מגדירים את `EMAIL_ADDRESS` ו-`EMAIL_PASSWORD` כמשתני סביבה (Environment Variables)
 במקום להעלות את קובץ `.env`. הבוט לא צריך כתובת אינטרנט או פורט פתוח, כי הוא רק מתחבר החוצה לג'ימייל.
 
+### Railway (או כל שרת שחוסם שליחת מייל ב-SMTP)
+
+Railway חוסם בתוכניות Free/Trial/Hobby את הפורטים לשליחת מייל (465/587). לכן שם הבוט שולח
+את התשובות דרך סקריפט קטן שרץ בחשבון הג'ימייל של הבוט (Google Apps Script), ב-HTTPS:
+
+1. מחוברים לג'ימייל של הבוט, נכנסים ל-<https://script.google.com> ← **New project**.
+2. מוחקים את מה שכתוב שם, מדביקים את כל התוכן של `deploy/gmail-send-relay.gs`,
+   ומחליפים את `CHANGE-ME` במילה סודית ארוכה. שומרים.
+3. **Deploy → New deployment** ← גלגל השיניים ← **Web app**.
+   **Execute as: Me**, **Who has access: Anyone** ← **Deploy** ← מאשרים הרשאות
+   (Advanced ← Go to … ← Allow).
+4. מעתיקים את ה-**Web app URL**.
+5. ב-Railway מוסיפים ב-**Variables**:
+   - `SEND_SCRIPT_URL` = הכתובת שהועתקה
+   - `SEND_SCRIPT_SECRET` = המילה הסודית מסעיף 2
+
+ג'ימייל רגיל מגביל שליחה דרך Apps Script לכ-100 נמענים ביום.
+
 ### שרת חינמי ב-Oracle Cloud (Always Free)
 
 הקובץ `deploy/oracle-cloud-init.sh` מתקין ומפעיל הכול לבד כשהשרת נוצר, בלי צורך להתחבר אליו.
