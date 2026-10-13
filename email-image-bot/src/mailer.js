@@ -20,7 +20,7 @@ function smtp() {
 /** Checks at startup that replies can be sent; throws with a readable message if not. */
 export async function verifySending() {
   if (config.sendScriptUrl) {
-    const res = await callScript({ action: 'ping' });
+    const res = await callScript({ action: 'ping' }, 30000);
     if (!res.ok) throw new Error(`Apps Script: ${res.error || 'unknown error'}`);
     return `Apps Script (${res.email || 'ok'})`;
   }
@@ -61,13 +61,16 @@ export async function sendReply(msg) {
   });
 }
 
-async function callScript(payload) {
+// Google stops a script after 6 minutes, so waiting longer than that is pointless.
+const SCRIPT_SEND_TIMEOUT_MS = Number(process.env.SEND_SCRIPT_TIMEOUT_SECONDS || 390) * 1000;
+
+async function callScript(payload, timeoutMs = SCRIPT_SEND_TIMEOUT_MS) {
   // Apps Script answers a POST with a redirect to the result, which fetch follows.
   const res = await fetch(config.sendScriptUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...payload, secret: config.sendScriptSecret }),
-    signal: AbortSignal.timeout(120000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   const body = await res.text();
   try {

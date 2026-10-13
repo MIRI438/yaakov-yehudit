@@ -60,6 +60,7 @@ async function handleMessage(source) {
   const downloadLinks = []; // files too big to attach
   const failures = [];
   const screenshots = [];
+  const attachedFrom = []; // source of each attachment, in case they have to be sent as links
   let totalBytes = 0;
 
   const results = await Promise.allSettled(links.map((link) => getMediaFromLink(link)));
@@ -82,6 +83,7 @@ async function handleMessage(source) {
       let name = file.filename;
       for (let n = 2; attachments.some((a) => a.filename === name); n++) name = `${n}_${file.filename}`;
       attachments.push({ filename: name, content: file.content, contentType: file.contentType });
+      attachedFrom.push(file.sourceUrl);
     }
   });
 
@@ -96,15 +98,37 @@ async function handleMessage(source) {
   if (screenshots.length) text += '\nמצורף צילום מסך של הדף כפי שהבוט ראה אותו.\n';
 
   const subject = mail.subject ? (/^re:/i.test(mail.subject) ? mail.subject : `Re: ${mail.subject}`) : 'הקובץ שלך';
-  await sendReply({
+  const reply = {
     to: replyTo,
     subject,
     text,
     attachments: [...attachments, ...screenshots],
     inReplyTo: mail.messageId,
     references: [...(mail.references ? [].concat(mail.references) : []), mail.messageId].filter(Boolean),
-  });
-  log(`replied to ${sender}: ${attachments.length} attached, ${downloadLinks.length} as link, ${failures.length} failed`);
+  };
+  const megabytes = (reply.attachments.reduce((n, a) => n + a.content.length, 0) / 1024 / 1024).toFixed(1);
+  const started = Date.now();
+  try {
+    await sendReply(reply);
+  } catch (err) {
+    log(`sending to ${sender} failed after ${((Date.now() - started) / 1000).toFixed(0)}s (${megabytes}MB): ${err.message}`);
+    if (!attachments.length) throw err;
+    // The files made the email too heavy to send: send the reply again with download links instead.
+    await sendReply({
+      ...reply,
+      attachments: [],
+      text:
+        (text.replace(/^מצורפ.*\n/m, '') +
+        `\nהקבצים כבדים מדי לשליחה במייל, אפשר להוריד אותם כאן:\n${attachedFrom.map((u) => `• ${u}`).join('\n')}\n`)
+          .replace(/\n{3,}/g, '\n\n'),
+    });
+    log(`replied to ${sender} with ${attachedFrom.length} download link(s) instead of attachments`);
+    return;
+  }
+  log(
+    `replied to ${sender}: ${attachments.length} attached, ${downloadLinks.length} as link, ${failures.length} failed ` +
+      `(${megabytes}MB, sent in ${((Date.now() - started) / 1000).toFixed(1)}s)`,
+  );
 }
 
 // ---- mailbox watching ----
@@ -127,7 +151,7 @@ async function checkInbox() {
         // Mark as read first so a crash never makes us answer the same email twice.
         await client.messageFlagsAdd({ uid: String(uid) }, ['\\Seen'], { uid: true });
         const msg = await client.fetchOne(String(uid), { source: true }, { uid: true });
-        handleMessage(msg.source).catch((err) => log(`error handling message ${uid}:`, err.message));
+        handleMessage(msg.source).catch((err) => log(`error handling message ${uid}: ${err.message}`));
       }
     } while (checkAgain);
   } catch (err) {
