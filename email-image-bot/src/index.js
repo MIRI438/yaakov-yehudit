@@ -76,14 +76,16 @@ async function handleMessage(source) {
     }
     for (const file of r.value) {
       if (file.tooLarge || totalBytes + file.content.length > config.maxTotalBytes) {
-        downloadLinks.push(file.sourceUrl);
+        // Files read from inside a page have no address to link to.
+        if (/^https?:/.test(file.sourceUrl)) downloadLinks.push(file.sourceUrl);
+        else failures.push(`${links[i]}\n   ← קובץ גדול מדי למייל (${file.filename})`);
         continue;
       }
       totalBytes += file.content.length;
       let name = file.filename;
       for (let n = 2; attachments.some((a) => a.filename === name); n++) name = `${n}_${file.filename}`;
       attachments.push({ filename: name, content: file.content, contentType: file.contentType });
-      attachedFrom.push(file.sourceUrl);
+      if (/^https?:/.test(file.sourceUrl)) attachedFrom.push(file.sourceUrl);
     }
   });
 
@@ -112,7 +114,7 @@ async function handleMessage(source) {
     await sendReply(reply);
   } catch (err) {
     log(`sending to ${sender} failed after ${((Date.now() - started) / 1000).toFixed(0)}s (${megabytes}MB): ${err.message}`);
-    if (!attachments.length) throw err;
+    if (!attachments.length || !attachedFrom.length) throw err;
     // The files made the email too heavy to send: send the reply again with download links instead.
     await sendReply({
       ...reply,

@@ -456,48 +456,65 @@ async function allMediaWithBrowser(pageUrl) {
       return buttons.length;
     });
     if (played) await page.waitForTimeout(2000);
-    const urls = await page.evaluate(() => {
-      const out = [];
+    // Every generated image / video in the chat, also inside shadow DOM. Each gets a marker so it can be
+    // found again (to read a blob: from the page, or to photograph the element as a last resort).
+    const found = await page.evaluate(() => {
+      const deepAll = (root, selector, out = []) => {
+        out.push(...root.querySelectorAll(selector));
+        for (const el of root.querySelectorAll('*')) if (el.shadowRoot) deepAll(el.shadowRoot, selector, out);
+        return out;
+      };
       // Pictures the user uploaded into the chat are not what they want back.
       const userMessage =
         '[data-message-author-role="user"], user-query, .user-query, [data-testid="user-message"], .font-user-message';
-      for (const el of document.querySelectorAll('img, video')) {
+      const out = [];
+      for (const el of deepAll(document, 'img, video')) {
         if (el.closest(userMessage)) continue;
-        if (el.tagName === 'VIDEO') {
-          const src = el.currentSrc || el.src || el.querySelector('source')?.src;
-          if (src) out.push(src);
-        } else if (el.naturalWidth >= 256 && el.naturalHeight >= 256) {
-          out.push(el.currentSrc || el.src);
-        }
+        const video = el.tagName === 'VIDEO';
+        const src = video ? el.currentSrc || el.src || el.querySelector('source')?.src : el.currentSrc || el.src;
+        if (!src || (!video && (el.naturalWidth < 256 || el.naturalHeight < 256))) continue;
+        el.setAttribute('data-bot-idx', String(out.length));
+        out.push({ idx: out.length, src, video });
       }
       return out;
     });
+    const items = [...found];
     // A player fed by a blob: stream: its real file / playlist is in the network log.
-    if (urls.some((u) => /^blob:/.test(u))) {
-      urls.push(...loaded.filter((i) => i.video).sort((a, b) => b.size - a.size).map((i) => i.url));
+    if (found.some((f) => f.video && /^blob:/.test(f.src))) {
+      for (const i of loaded.filter((x) => x.video).sort((a, b) => b.size - a.size)) items.push({ src: i.url, video: true });
     }
     const results = [];
     const seen = new Set();
     const problems = [];
-    const attempt = (fn, url) =>
-      fn(url).catch((err) => {
-        problems.push(`${url.slice(0, 100)}: ${err.message}`);
+    const attempt = (fn, label) =>
+      fn().catch((err) => {
+        problems.push(`${label.slice(0, 100)}: ${err.message}`);
         return null;
       });
-    for (const url of urls) {
+    for (const item of items) {
       if (results.length >= config.maxFilesPerLink) break;
-      if (!parseHttpUrl(url) || seen.has(url)) continue; // skips blob: / data:
-      seen.add(url);
-      const media =
-        (await attempt(downloadMedia, fullSizeUrl(url))) ||
-        (await attempt(downloadMedia, url)) ||
-        // Some chat sites only serve the file to the browser session that opened the chat.
-        (await attempt((u) => downloadWithBrowser(page, u), url));
+      if (seen.has(item.src)) continue;
+      seen.add(item.src);
+      let media = null;
+      if (parseHttpUrl(item.src)) {
+        media =
+          (await attempt(() => downloadMedia(fullSizeUrl(item.src)), item.src)) ||
+          (await attempt(() => downloadMedia(item.src), item.src)) ||
+          // Some chat sites only serve the file to the browser session that opened the chat.
+          (await attempt(() => downloadWithBrowser(page, item.src), item.src));
+      } else if (/^(blob|data):/.test(item.src) && item.idx !== undefined) {
+        // The file only exists inside the page (e.g. Gemini shows generated images as blob:).
+        media = await attempt(() => readFromPage(page, item), item.src);
+      }
+      // Last resort for a picture: photograph it as shown on the page.
+      if (!media && !item.video && item.idx !== undefined) {
+        media = await attempt(() => photographElement(page, item.idx), `screenshot #${item.idx}`);
+      }
       if (media && !results.some((m) => m.sourceUrl === media.sourceUrl)) results.push(media);
     }
     if (!results.length) {
       const err = new Error('לא נמצאו תמונות או סרטונים שאפשר להוריד בשיחה (מצורף צילום של מה שהבוט ראה)');
-      err.diagnostics = `${await describePage(page)} candidates=${urls.length} failures=${JSON.stringify(problems.slice(0, 6))}`;
+      err.diagnostics = `${await describePage(page)} candidates=${items.length} failures=${JSON.stringify(problems.slice(0, 6))}`;
       throw err;
     }
     return results;
@@ -512,6 +529,44 @@ function fullSizeUrl(url) {
     return u.toString();
   }
   return url;
+}
+
+/** Reads a blob: / data: image or video straight out of the page that shows it. */
+async function readFromPage(page, item) {
+  const data = await page.evaluate(async (idx) => {
+    const el = document.querySelector(`[data-bot-idx="${idx}"]`) ||
+      [...document.querySelectorAll('*')].map((e) => e.shadowRoot?.querySelector(`[data-bot-idx="${idx}"]`)).find(Boolean);
+    const blob = await (await fetch(el.currentSrc || el.src)).blob();
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    return { type: blob.type, base64: btoa(binary) };
+  }, item.idx);
+  const type = (data.type || (item.video ? 'video/mp4' : 'image/png')).toLowerCase();
+  if (!isMediaType(type)) throw new Error(`not a file (${type})`);
+  const name = `${item.video ? 'video' : 'image'}-${item.idx + 1}`;
+  const base = { contentType: type, filename: filenameFor(`https://x/${name}`, type), sourceUrl: `page:${name}` };
+  return fitInEmail(base, Buffer.from(data.base64, 'base64'));
+}
+
+/** A downloaded file as a result; a video too big for an email is compressed to fit. */
+async function fitInEmail(base, content) {
+  if (content.length <= config.maxFileBytes) return { ...base, content };
+  if (base.contentType.startsWith('video/')) {
+    const small = await withTempDir(async (dir) => {
+      const file = path.join(dir, 'original');
+      await writeFile(file, content);
+      return shrinkVideoFile(file);
+    });
+    if (small) return { ...base, contentType: 'video/mp4', filename: base.filename.replace(/\.\w+$/, '.mp4'), content: small };
+  }
+  return { ...base, tooLarge: true };
+}
+
+/** A PNG of the picture exactly as the page shows it. */
+async function photographElement(page, idx) {
+  const content = await page.locator(`[data-bot-idx="${idx}"]`).first().screenshot({ timeout: 10000 });
+  return { contentType: 'image/png', filename: `image-${idx + 1}.png`, sourceUrl: `screenshot:${idx}`, content };
 }
 
 async function downloadWithBrowser(page, url) {
@@ -530,18 +585,7 @@ async function downloadWithBrowser(page, url) {
   if (!res.ok()) throw new Error(`browser download: HTTP ${res.status()}`);
   if (isStream(type, current)) return streamResult(current);
   if (!isMediaType(type)) throw new Error(`browser download: not a file (${type || 'no type'})`);
-  const base = { contentType: type, filename: filenameFor(current, type), sourceUrl: current };
-  const content = await res.body();
-  if (content.length <= config.maxFileBytes) return { ...base, content };
-  if (type.startsWith('video/')) {
-    const small = await withTempDir(async (dir) => {
-      const file = path.join(dir, 'original');
-      await writeFile(file, content);
-      return shrinkVideoFile(file);
-    });
-    if (small) return { ...base, contentType: 'video/mp4', filename: filenameFor(current, 'video/mp4'), content: small };
-  }
-  return { ...base, tooLarge: true };
+  return fitInEmail({ contentType: type, filename: filenameFor(current, type), sourceUrl: current }, await res.body());
 }
 
 async function downloadMedia(url) {
