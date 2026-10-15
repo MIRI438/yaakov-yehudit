@@ -9,14 +9,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findLinks } from '../extract.js';
 import {
-  createJob, deleteJob, detectSite, filePath, getJob, historyFor, loadStore, onJobUpdate, publicJob, setStar,
-  stats, zipJob,
+  addCredits, createJob, deleteJob, detectSite, filePath, getJob, historyFor, loadStore, onJobUpdate, publicJob,
+  quotaFor, setStar, stats, zipJob,
 } from './jobs.js';
 
 const log = (...args) => console.log(new Date().toISOString(), ...args);
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
 const MAX_LINKS_PER_REQUEST = 10;
 const MAX_LINKS_PER_HOUR = Number(process.env.WEB_MAX_LINKS_PER_HOUR || 60);
+// No payment provider is connected yet. PAYMENTS=demo adds credits without charging (for testing only).
+const PAYMENTS = process.env.PAYMENTS || 'off';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -127,6 +129,18 @@ async function route(req, res) {
 
     if (method === 'GET' && parts[1] === 'stats') return send(res, 200, stats());
 
+    // My quota for today, plus how to reach the email bot.
+    if (method === 'GET' && parts[1] === 'me') {
+      return send(res, 200, { quota: quotaFor(visitor, clientIp(req)), payments: PAYMENTS, botEmail: process.env.EMAIL_ADDRESS || '' });
+    }
+
+    if (method === 'POST' && parts[1] === 'buy') {
+      if (PAYMENTS !== 'demo') return send(res, 503, { error: 'התשלום עוד לא פתוח. נפתח בקרוב.' });
+      const body = await readJson(req).catch(() => ({}));
+      addCredits(visitor, Math.min(Math.max(Number(body.packs) || 1, 1), 10), { provider: 'demo' });
+      return send(res, 200, { quota: quotaFor(visitor, clientIp(req)) });
+    }
+
     // Which site a link belongs to (for the live badge while typing).
     if (method === 'GET' && parts[1] === 'detect') return send(res, 200, detectSite(url.searchParams.get('url') || ''));
 
@@ -139,10 +153,14 @@ async function route(req, res) {
       }
       const links = findLinks(String(body.text || ''), '', '').slice(0, MAX_LINKS_PER_REQUEST);
       if (!links.length) return send(res, 400, { error: 'לא מצאתי קישור. הדביקו כתובת שמתחילה ב-https://' });
+      const quota = quotaFor(visitor, clientIp(req));
+      if (quota.on && quota.available < links.length) {
+        return send(res, 402, { error: 'quota', quota });
+      }
       if (!allowed(clientIp(req), links.length)) {
         return send(res, 429, { error: 'הגעתם למגבלת השימוש לשעה. נסו שוב מעט מאוחר יותר.' });
       }
-      return send(res, 200, { jobs: links.map((l) => publicJob(createJob(l, visitor))) });
+      return send(res, 200, { jobs: links.map((l) => publicJob(createJob(l, visitor, clientIp(req)))) });
     }
 
     if (method === 'GET' && parts[1] === 'history') return send(res, 200, { jobs: historyFor(visitor) });

@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Linkra · קישור נכנס, קובץ יוצא</title>
-  <meta name="description" content="מדביקים קישור, מקבלים את התמונה או הסרטון באיכות המקורית." />
+  <title>Linkra · התמונה שיצרת נחסמה?</title>
+  <meta name="description" content="יצרתם תמונה ב-Gemini, ChatGPT או Leonardo והסינון חסם אותה? מדביקים קישור ומקבלים את הקובץ עצמו." />
   <meta name="theme-color" content="#07060d" />
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -28,9 +28,9 @@
       </svg>
       <span class="brand-name">Linkra</span>
     </a>
-    <div class="live-pill" title="קבצים שחולצו">
-      <span class="pulse"></span><span id="stat-files">0</span>&nbsp;קבצים
-    </div>
+    <button class="quota-pill" id="quota-btn" type="button" dir="ltr" title="הורדות שנשארו היום" hidden>
+      <span class="q-ring" id="quota-ring"></span><b id="quota-left">10</b><span class="q-of" id="quota-of">/10</span>
+    </button>
     <button class="history-btn" id="open-history" type="button" aria-label="ההיסטוריה שלי">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 3"/></svg>
       <span class="hb-count" id="history-count" hidden>0</span>
@@ -40,9 +40,10 @@
   <main>
     <section class="hero" id="studio">
       <h1 class="headline">
-        <span class="line">קישור נכנס.</span>
-        <span class="line"><em class="gradient-text">קובץ יוצא.</em></span>
+        <span class="line">יצרת תמונה</span>
+        <span class="line">והיא <em class="gradient-text">נחסמה?</em></span>
       </h1>
+      <p class="sub">מדביקים את הקישור, מקבלים את הקובץ עצמו.</p>
 
       <form class="composer" id="composer" autocomplete="off">
         <div class="composer-glow" aria-hidden="true"></div>
@@ -61,10 +62,11 @@
       </form>
 
       <ol class="steps" aria-label="איך זה עובד">
-        <li><span class="step-ico">⌘V</span>מדביקים</li>
-        <li><span class="step-ico">✦</span>מחלצים</li>
-        <li><span class="step-ico">↓</span>מורידים</li>
+        <li><span class="step-ico">✦</span>יוצרים</li>
+        <li><span class="step-ico">🔗</span>מדביקים קישור</li>
+        <li><span class="step-ico">↓</span>מקבלים קובץ</li>
       </ol>
+      <p class="trust"><span>✓ סינון צניעות</span><span>✓ איכות מקורית</span><span id="trust-free">✓ 10 חינם ביום</span></p>
 
       <div class="recents" id="recents" hidden>
         <div class="recents-track" id="recents-track"></div>
@@ -80,8 +82,9 @@
   </main>
 
   <footer class="footer">
+    <a class="mail-way" id="mail-way" hidden>📧 גם במייל: שלחו קישור ל-<b dir="ltr"></b></a>
     <a class="bookmarklet" id="bookmarklet" href="#" title="גררו לסרגל הסימניות">⚡ Linkra לסרגל הסימניות</a>
-    <span class="muted">קבצים נמחקים אחרי 7 ימים</span>
+    <span class="muted"><span id="stat-files">0</span> קבצים שוחררו · נמחקים אחרי 7 ימים</span>
   </footer>
 
   <!-- history drawer -->
@@ -120,6 +123,20 @@
         <div class="tabs" id="studio-tabs" role="tablist"></div>
         <div class="tab-body" id="studio-body"></div>
       </div>
+    </div>
+  </div>
+
+  <!-- paywall -->
+  <div class="paywall" id="paywall" hidden>
+    <div class="pay-card" role="dialog" aria-modal="true" aria-labelledby="pay-title">
+      <button class="icon-btn pay-close" id="pay-close" type="button" aria-label="סגירה">✕</button>
+      <div class="pay-meter" dir="ltr"><span id="pay-used">10</span><small>/<span id="pay-free">10</span></small></div>
+      <h2 id="pay-title">נגמרו ההורדות החינמיות להיום</h2>
+      <button class="pack" id="pay-buy" type="button">
+        <span class="pack-n">+<b id="pack-size">10</b> הורדות</span>
+        <span class="pack-price" dir="ltr"><i>₪</i><b id="pack-price">2</b></span>
+      </button>
+      <p class="pay-note" id="pay-note">לא פג תוקף · מחר שוב <span id="pay-free2">10</span> חינם</p>
     </div>
   </div>
 

@@ -108,6 +108,65 @@ export function recordStats({ site, files = [], blocked = 0 }) {
 
 export const stats = () => db.stats;
 
+// ---------- quota: N free downloads a day, then paid packs ----------
+// A "download" is one link that came back with files. Failed links are free.
+
+export const PRICING = {
+  freePerDay: Number(process.env.FREE_PER_DAY || 10),
+  packSize: Number(process.env.PACK_SIZE || 10),
+  packPrice: Number(process.env.PACK_PRICE || 2), // shekels
+  // Clearing cookies resets the visitor, so one address gets at most this many free a day.
+  freePerIp: Number(process.env.FREE_PER_IP || 30),
+};
+const quotaOn = () => process.env.QUOTA !== 'off';
+const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Jerusalem' });
+
+function usageToday() {
+  db.usage ||= {};
+  if (db.usage.day !== today()) db.usage = { day: today(), visitors: {}, ips: {} };
+  return db.usage;
+}
+
+export function quotaFor(visitor, ip) {
+  const u = usageToday();
+  const used = u.visitors[visitor] || 0;
+  const ipLeft = PRICING.freePerIp - (u.ips[ip] || 0);
+  const freeLeft = quotaOn() ? Math.max(0, Math.min(PRICING.freePerDay - used, ipLeft)) : Infinity;
+  const pending = Object.values(db.jobs).filter((j) => j.visitor === visitor && (j.status === 'queued' || j.status === 'running')).length;
+  const credits = (db.credits ||= {})[visitor] || 0;
+  return {
+    on: quotaOn(),
+    usedToday: used,
+    freeLeft: quotaOn() ? freeLeft : null,
+    credits,
+    available: quotaOn() ? Math.max(0, freeLeft + credits - pending) : null,
+    ...PRICING,
+  };
+}
+
+function consume(job) {
+  if (!quotaOn()) return;
+  const u = usageToday();
+  const q = quotaFor(job.visitor, job.ip);
+  if (q.freeLeft > 0) job.paid = false;
+  else if (q.credits > 0) {
+    db.credits[job.visitor]--;
+    job.paid = true;
+  }
+  u.visitors[job.visitor] = (u.visitors[job.visitor] || 0) + 1;
+  if (job.ip) u.ips[job.ip] = (u.ips[job.ip] || 0) + 1;
+  save();
+}
+
+/** After a successful payment: add packs of downloads (they do not expire). */
+export function addCredits(visitor, packs = 1, payment = {}) {
+  db.credits ||= {};
+  db.credits[visitor] = (db.credits[visitor] || 0) + packs * PRICING.packSize;
+  (db.payments ||= []).push({ visitor, packs, amount: packs * PRICING.packPrice, at: Date.now(), ...payment });
+  save();
+  log(`credits: +${packs * PRICING.packSize} (${payment.provider || 'unknown'})`);
+}
+
 // ---------- jobs ----------
 
 const events = new EventEmitter();
@@ -120,7 +179,7 @@ const newId = () => randomBytes(9).toString('base64url');
 /** The public view of a job (what the browser sees). */
 export function publicJob(job) {
   if (!job) return null;
-  const { visitor, ...rest } = job;
+  const { visitor, ip, ...rest } = job;
   return rest;
 }
 
@@ -135,10 +194,11 @@ function update(job) {
   events.emit(job.id, publicJob(job));
 }
 
-export function createJob(url, visitor) {
+export function createJob(url, visitor, ip = '') {
   const job = {
     id: newId(),
     visitor,
+    ip,
     url,
     site: detectSite(url),
     status: 'queued',
@@ -232,6 +292,7 @@ async function runJob(job) {
   }
   job.finishedAt = Date.now();
   job.durationMs = job.finishedAt - started;
+  if (job.status === 'done') consume(job);
   step(job, job.status === 'done' ? 'done' : 'failed');
   recordStats({ site: job.site.key, files: job.files, blocked: job.blocked });
   log(`website: ${job.status} ${job.url} (${job.files.length} files, ${job.blocked} blocked, ${job.durationMs}ms)`);

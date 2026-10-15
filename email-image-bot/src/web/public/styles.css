@@ -75,13 +75,53 @@ button { font: inherit; color: inherit; }
 .brand-mark { width: 34px; height: 34px; filter: drop-shadow(0 0 14px rgba(139, 92, 246, .55)); transition: transform .5s var(--ease); }
 .brand:hover .brand-mark { transform: rotate(-12deg) scale(1.06); }
 .brand-name { font-family: var(--display); font-weight: 800; font-size: 22px; letter-spacing: -.02em; direction: ltr; }
-.live-pill {
-  margin-inline-start: auto; display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--muted);
-  padding: 6px 12px; border-radius: 999px; background: var(--surface); border: 1px solid var(--stroke); white-space: nowrap;
-}
-.live-pill #stat-files { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
 .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--lime); animation: pulse 2s infinite; }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(182,255,92,.6); } 70% { box-shadow: 0 0 0 9px rgba(182,255,92,0); } 100% { box-shadow: 0 0 0 0 rgba(182,255,92,0); } }
+.quota-pill {
+  margin-inline-start: auto; display: flex; align-items: center; gap: 7px; cursor: pointer; font: inherit; color: var(--muted);
+  padding: 5px 12px 5px 6px; border-radius: 999px; background: var(--surface); border: 1px solid var(--stroke); white-space: nowrap; transition: all .2s var(--ease);
+}
+.quota-pill:hover { border-color: var(--stroke-2); color: var(--text); }
+.quota-pill b { color: var(--text); font-size: 15px; font-variant-numeric: tabular-nums; }
+.quota-pill .q-of { font-size: 13px; margin-inline-start: -6px; }
+.q-ring {
+  --p: 1; width: 24px; height: 24px; border-radius: 50%;
+  background: conic-gradient(var(--lime) calc(var(--p) * 360deg), rgba(255,255,255,.1) 0);
+  -webkit-mask: radial-gradient(circle, transparent 7px, #000 8px); mask: radial-gradient(circle, transparent 7px, #000 8px);
+  transition: background .4s;
+}
+.quota-pill.low .q-ring { background: conic-gradient(var(--amber) calc(var(--p) * 360deg), rgba(255,255,255,.1) 0); }
+.quota-pill.empty { border-color: var(--pink); color: var(--text); animation: nudge 2.4s ease-in-out infinite; }
+.quota-pill.empty .q-ring { background: var(--pink); }
+@keyframes nudge { 0%,100% { box-shadow: 0 0 0 0 rgba(255,79,163,.0); } 50% { box-shadow: 0 0 0 6px rgba(255,79,163,.18); } }
+
+/* ---------- paywall ---------- */
+.paywall { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; padding: 16px; background: rgba(4,3,10,.82); backdrop-filter: blur(10px); animation: fade .25s both; }
+.pay-card {
+  position: relative; width: min(380px, 100%); padding: 34px 26px 24px; text-align: center; border-radius: 28px;
+  background: linear-gradient(180deg, rgba(139,92,246,.16), rgba(13,11,24,.96) 55%); border: 1px solid var(--stroke-2);
+  box-shadow: 0 30px 90px rgba(0,0,0,.6), 0 0 80px rgba(255,79,163,.12); animation: rise .5s var(--ease) both;
+}
+.pay-close { position: absolute; top: 12px; left: 12px; }
+.pay-meter { font-family: var(--display); font-weight: 900; font-size: 64px; line-height: 1; letter-spacing: -.03em; }
+.pay-meter small { font-size: 26px; color: var(--faint); }
+.pay-card h2 { font-family: var(--display); font-size: 20px; margin: 10px 0 22px; }
+.pack {
+  width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 12px; cursor: pointer; font: inherit;
+  padding: 18px 22px; border-radius: 18px; border: 0; color: #07060d; background: var(--grad); background-size: 160% 100%;
+  box-shadow: 0 12px 40px rgba(255,79,163,.3); transition: transform .2s var(--ease), background-position .6s;
+}
+.pack:hover { transform: translateY(-2px); background-position: 100% 0; }
+.pack:disabled { opacity: .6; cursor: wait; }
+.pack-n { font-weight: 700; font-size: 17px; }
+.pack-price { font-family: var(--display); font-weight: 900; font-size: 30px; }
+.pack-price i { font-family: Arial, var(--body); font-style: normal; font-weight: 700; font-size: .8em; margin-inline-end: 2px; }
+.pay-note { margin: 14px 0 0; font-size: 13px; color: var(--faint); }
+
+.mail-way { text-decoration: none; color: var(--muted); }
+.mail-way b { color: var(--text); font-weight: 600; }
+.mail-way:hover b { color: var(--pink); }
+
 .history-btn {
   position: relative; display: grid; place-items: center; width: 42px; height: 42px; border-radius: 13px; cursor: pointer;
   background: var(--surface-2); border: 1px solid var(--stroke-2); transition: all .2s var(--ease);
@@ -98,8 +138,11 @@ main { width: min(1100px, 100%); margin: 0 auto; }
 .hero { padding: clamp(56px, 12vh, 130px) 0 30px; text-align: center; }
 .headline {
   font-family: var(--display); font-weight: 900; letter-spacing: -.04em; line-height: .95;
-  font-size: clamp(54px, 11vw, 150px); margin: 0 0 clamp(30px, 5vh, 48px); text-wrap: balance;
+  font-size: clamp(48px, 9.5vw, 128px); margin: 0 0 18px; text-wrap: balance;
 }
+.sub { margin: 0 auto clamp(26px, 4vh, 40px); color: var(--muted); font-size: clamp(17px, 2.2vw, 21px); animation: rise 1s .24s var(--ease) both; }
+.trust { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px 18px; margin: 14px 0 0; font-size: 13px; color: var(--faint); }
+.trust span { white-space: nowrap; }
 .headline .line { display: block; animation: rise 1s var(--ease) both; }
 .headline .line:nth-child(2) { animation-delay: .12s; }
 .gradient-text {
@@ -353,7 +396,8 @@ main { width: min(1100px, 100%); margin: 0 auto; }
 }
 @media (max-width: 560px) {
   body { font-size: 16px; }
-  .live-pill { font-size: 12px; padding: 5px 9px; }
+  .quota-pill { padding: 4px 10px 4px 5px; }
+  .footer { justify-content: center; text-align: center; }
   .cta { padding: 13px 16px; }
   .cta-label { display: none; }
   .timeline li { font-size: 11px; }

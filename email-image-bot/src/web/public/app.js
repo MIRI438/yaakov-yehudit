@@ -138,6 +138,75 @@ async function loadStats() {
   }
 }
 
+// ---------- quota: free downloads today + paid packs ----------
+
+let me = null; // { quota, payments, botEmail }
+let pendingText = ''; // what was pasted when the free downloads ran out
+async function loadMe() {
+  try {
+    me = await (await fetch('/api/me')).json();
+    renderQuota();
+  } catch {
+    /* the server still enforces it */
+  }
+}
+function renderQuota() {
+  const q = me?.quota;
+  const btn = $('#quota-btn');
+  if (me?.botEmail) {
+    const m = $('#mail-way');
+    m.hidden = false;
+    m.href = `mailto:${me.botEmail}`;
+    $('b', m).textContent = me.botEmail;
+  }
+  if (!q?.on) return;
+  btn.hidden = false;
+  const left = q.freeLeft + q.credits;
+  $('#quota-left').textContent = left;
+  $('#quota-of').textContent = q.credits ? '' : `/${q.freePerDay}`;
+  btn.classList.toggle('empty', left === 0);
+  btn.classList.toggle('low', left > 0 && left <= 2);
+  $('#quota-ring').style.setProperty('--p', q.credits ? 1 : q.freeLeft / q.freePerDay);
+  $('#trust-free').textContent = `✓ ${q.freePerDay} חינם ביום`;
+}
+function openPaywall() {
+  const q = me?.quota;
+  if (!q) return;
+  const empty = q.freeLeft + q.credits === 0;
+  $('#pay-used').textContent = Math.min(q.usedToday, q.freePerDay);
+  $('#pay-free').textContent = q.freePerDay;
+  $('#pay-free2').textContent = q.freePerDay;
+  $('#pack-size').textContent = q.packSize;
+  $('#pack-price').textContent = q.packPrice;
+  $('#pay-title').textContent = empty ? 'נגמרו ההורדות החינמיות להיום'
+    : q.credits ? `נשארו לך ${q.freeLeft + q.credits} הורדות` : `נשארו ${q.freeLeft} הורדות חינם היום`;
+  $('#pay-note').firstChild.textContent = me.payments === 'off' ? 'התשלום נפתח בקרוב · מחר שוב ' : 'לא פג תוקף · מחר שוב ';
+  $('#paywall').hidden = false;
+}
+const closePaywall = () => { $('#paywall').hidden = true; };
+$('#quota-btn').addEventListener('click', openPaywall);
+$('#pay-close').addEventListener('click', closePaywall);
+$('#paywall').addEventListener('click', (e) => { if (e.target.id === 'paywall') closePaywall(); });
+$('#pay-buy').addEventListener('click', async () => {
+  const btn = $('#pay-buy');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/buy', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"packs":1}' });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || 'התשלום לא עבר');
+    me.quota = body.quota;
+    renderQuota();
+    closePaywall();
+    confetti();
+    toast(`+${me.quota.packSize} הורדות ✦`, 'ok');
+    if (pendingText) { input.value = pendingText; pendingText = ''; refreshComposer(); form.requestSubmit(); }
+  } catch (err) {
+    toast(err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 // ---------- composer: paste = go ----------
 
 const input = $('#links');
@@ -196,6 +265,13 @@ form.addEventListener('submit', async (e) => {
   try {
     const res = await fetch('/api/jobs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) });
     const body = await res.json();
+    if (res.status === 402) {
+      me = { ...me, quota: body.quota };
+      renderQuota();
+      pendingText = text;
+      openPaywall();
+      return;
+    }
     if (!res.ok) throw new Error(body.error || 'משהו השתבש');
     input.value = '';
     refreshComposer();
@@ -268,6 +344,7 @@ function follow(id) {
     } else if (job.status === 'failed') toast('לא הצלחנו לחלץ', 'err');
     loadHistory();
     loadStats();
+    loadMe();
   };
 }
 
@@ -567,7 +644,8 @@ $('#studio-close').addEventListener('click', closeStudio);
 modal.addEventListener('click', (e) => { if (e.target === modal) closeStudio(); });
 addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
-  if (!modal.hidden) closeStudio();
+  if (!$('#paywall').hidden) closePaywall();
+  else if (!modal.hidden) closeStudio();
   else closeDrawer();
 });
 
@@ -792,6 +870,7 @@ function tabFrame() {
 // ---------- boot ----------
 
 loadStats();
+loadMe();
 loadHistory();
 setInterval(loadStats, 30000);
 
