@@ -142,7 +142,7 @@ function cutAtFirst(content, markers) {
 }
 
 /** Removes the quoted earlier messages from a reply, so links from old emails are not re-sent. */
-function stripQuotedText(text) {
+export function stripQuotedText(text) {
   const clean = String(text).replace(BIDI_MARKS, '');
   return cutAtFirst(clean, [...TEXT_QUOTE_STARTS, ...TEXT_FORWARD_STARTS])
     .split(/\r?\n/)

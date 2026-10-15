@@ -5,6 +5,46 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const PREVIEW = Boolean(window.__LINKRA_PREVIEW__);
 
+// ---------- device signature ----------
+// Free downloads are counted per device too. The signature is made of things that stay the same when
+// cookies are cleared (screen, graphics card, how text is drawn...), and only a hash is sent.
+
+const deviceSig = (async () => {
+  try {
+    const c = document.createElement('canvas');
+    c.width = 240; c.height = 60;
+    const x = c.getContext('2d');
+    x.textBaseline = 'top';
+    x.font = '16px Arial';
+    x.fillStyle = '#f60'; x.fillRect(10, 5, 120, 30);
+    x.fillStyle = '#069'; x.fillText('Linkra ✦ קובץ 123 😀', 4, 8);
+    let gpu = '';
+    try {
+      const gl = document.createElement('canvas').getContext('webgl');
+      const ext = gl.getExtension('WEBGL_debug_renderer_info');
+      gpu = gl.getParameter(ext.UNMASKED_RENDERER_WEBGL);
+    } catch { /* no WebGL */ }
+    const raw = [
+      c.toDataURL(), gpu, screen.width, screen.height, screen.colorDepth, devicePixelRatio,
+      Intl.DateTimeFormat().resolvedOptions().timeZone, navigator.languages?.join(','), navigator.hardwareConcurrency,
+      navigator.deviceMemory, navigator.platform, navigator.maxTouchPoints,
+    ].join('|');
+    const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
+    return [...new Uint8Array(hash)].slice(0, 16).map((n) => n.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return '';
+  }
+})();
+{
+  const plainFetch = window.fetch.bind(window);
+  window.fetch = async (input, init = {}) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (!url.startsWith('/api/')) return plainFetch(input, init);
+    const sig = await deviceSig;
+    return plainFetch(input, { ...init, headers: { ...(init.headers || {}), 'x-device': sig } });
+  };
+}
+
 // ---------- sites ----------
 
 const SITES = [
@@ -175,12 +215,13 @@ function openPaywall() {
   if (!q) return;
   if (me.needsPhone) return openPhone();
   const empty = q.freeLeft + q.credits === 0;
-  $('#pay-used').textContent = Math.min(q.usedToday, q.freePerDay);
+  $('#pay-used').textContent = q.freePerDay - q.freeLeft;
   $('#pay-free').textContent = q.freePerDay;
   $('#pay-free2').textContent = q.freePerDay;
   $('#pack-size').textContent = q.packSize;
   $('#pack-price').textContent = q.packPrice;
-  $('#pay-title').textContent = empty ? 'נגמרו ההורדות החינמיות להיום'
+  $('#pay-title').textContent = empty && q.byDevice ? 'במכשיר הזה נגמרו ההורדות החינמיות להיום'
+    : empty ? 'נגמרו ההורדות החינמיות להיום'
     : (q.freeLeft + q.credits === 1 ? 'נשארה הורדה אחת' : `נשארו ${q.freeLeft + q.credits} הורדות`) + (q.credits ? '' : ' חינם היום');
   $('#pay-note').firstChild.textContent = me.payments === 'off' ? 'התשלום נפתח בקרוב · מחר שוב ' : 'לא פג תוקף · מחר שוב ';
   $('#paywall').hidden = false;

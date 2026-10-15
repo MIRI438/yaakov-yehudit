@@ -12,10 +12,16 @@ const log = (...args) => console.log(new Date().toISOString(), ...args);
 
 export const PRICING = {
   freePerDay: Number(process.env.FREE_PER_DAY || 8),
+  // An email address that is not linked to a phone gets this many free downloads once, then has to link one.
+  emailTrial: Number(process.env.EMAIL_TRIAL || 8),
   packSize: Number(process.env.PACK_SIZE || 10),
   packPrice: Number(process.env.PACK_PRICE || 2), // shekels
 };
 const quotaOn = () => process.env.QUOTA !== 'off';
+// Free downloads also follow the device, so switching phones on the same device does not add more:
+// the browser (cookie) gets freePerDay a day in total, and a device signature (survives clearing cookies)
+// can give free downloads to at most this many phone numbers a day.
+const PHONES_PER_DEVICE = Number(process.env.FREE_PHONES_PER_DEVICE || 2);
 
 // twilio = real calls (Twilio Verify), demo = the code is written to the log (testing only),
 // off = no phone needed (the quota then follows the browser cookie, which is easy to reset).
@@ -32,7 +38,9 @@ function db() {
   d.sessions ||= {}; // token -> phone
   d.credits ||= {}; // quota key -> credits (for keys that are not accounts)
   if (d.usage?.day !== today()) d.usage = { day: today(), counts: {}, verifications: 0 };
-  d.usage.counts ||= {};
+  d.usage.counts ||= {}; // key -> downloads today; d:<browser> -> free downloads today
+  d.usage.devices ||= {}; // device signature -> keys that got free downloads today
+  d.trials ||= {}; // email -> free downloads used before linking a phone
   return d;
 }
 
@@ -129,7 +137,7 @@ export async function checkVerification(rawPhone, code, visitor) {
   d.sessions[token] = phone;
   saveStore();
   log(`phone verified: ${maskPhone(phone)}`);
-  return { ok: true, token };
+  return { ok: true, token, phone };
 }
 
 export function signOut(token) {
@@ -204,31 +212,51 @@ function creditsOf(key) {
   return key.startsWith('p:') ? d.accounts[key.slice(2)]?.credits || 0 : d.credits[key] || 0;
 }
 
-/** pending: links of this key that are still being processed (they will use the quota). */
-export function quotaFor(key, pending = 0) {
+function freeLeftFor(key, { browser, device } = {}) {
+  const d = db();
+  // Without phone checks there is nothing to link, so an address simply gets the daily amount.
+  if (key.startsWith('e:') && VERIFY !== 'off') return Math.max(0, PRICING.emailTrial - (d.trials[key.slice(2)] || 0));
+  let left = PRICING.freePerDay - (d.usage.counts[key] || 0);
+  if (browser) left = Math.min(left, PRICING.freePerDay - (d.usage.counts[`d:${browser}`] || 0));
+  const others = (d.usage.devices[device] || []).filter((k) => k !== key);
+  if (device && others.length >= PHONES_PER_DEVICE) left = 0;
+  return Math.max(0, left);
+}
+
+/**
+ * pending: links of this key that are still being processed (they will use the quota).
+ * where: { browser, device } of the request (website only).
+ */
+export function quotaFor(key, pending = 0, where = {}) {
   const used = db().usage.counts[key] || 0;
-  const freeLeft = Math.max(0, PRICING.freePerDay - used);
+  const freeLeft = freeLeftFor(key, where);
   const credits = creditsOf(key);
   return {
     on: quotaOn(),
     usedToday: used,
     freeLeft: quotaOn() ? freeLeft : null,
     credits,
+    // The phone still has free downloads, but this device already used today's.
+    byDevice: freeLeft < freeLeftFor(key),
     available: quotaOn() ? Math.max(0, freeLeft + credits - pending) : null,
     ...PRICING,
   };
 }
 
-/** One successful link: a free download if any are left today, otherwise a paid one. */
-export function consume(key) {
+/** One successful link: a free download if any are left, otherwise a paid one. */
+export function consume(key, where = {}) {
   if (!quotaOn() || !key) return;
   const d = db();
-  const used = d.usage.counts[key] || 0;
-  if (used >= PRICING.freePerDay) {
-    if (key.startsWith('p:') && d.accounts[key.slice(2)]?.credits > 0) d.accounts[key.slice(2)].credits--;
-    else if (d.credits[key] > 0) d.credits[key]--;
-  }
-  d.usage.counts[key] = used + 1;
+  if (freeLeftFor(key, where) > 0) {
+    if (key.startsWith('e:') && VERIFY !== 'off') d.trials[key.slice(2)] = (d.trials[key.slice(2)] || 0) + 1;
+    if (where.browser) d.usage.counts[`d:${where.browser}`] = (d.usage.counts[`d:${where.browser}`] || 0) + 1;
+    if (where.device) {
+      const keys = (d.usage.devices[where.device] ||= []);
+      if (!keys.includes(key)) keys.push(key);
+    }
+  } else if (key.startsWith('p:') && d.accounts[key.slice(2)]?.credits > 0) d.accounts[key.slice(2)].credits--;
+  else if (d.credits[key] > 0) d.credits[key]--;
+  d.usage.counts[key] = (d.usage.counts[key] || 0) + 1;
   saveStore();
 }
 
@@ -246,4 +274,26 @@ export function addCredits(key, packs = 1, payment = {}) {
 export const publicAccount = (account) =>
   account && { phone: maskPhone(account.phone), emails: account.emails, credits: account.credits };
 
-onJobDone((job) => consume(job.owner));
+/** The email bot links the address after the phone answered with the right code. */
+export function linkEmail(phone, email) {
+  email = email.toLowerCase();
+  const owner = accountByEmail(email);
+  if (owner && owner.phone !== phone) return { error: 'המייל הזה כבר מחובר למספר אחר' };
+  const d = db();
+  const account = (d.accounts[phone] ||= { phone, emails: [], credits: 0, createdAt: Date.now() });
+  if (!account.emails.includes(email)) account.emails.push(email);
+  saveStore();
+  return { ok: true };
+}
+
+/** Email-only activation (no website needed): asked for a phone -> called it -> got the code. */
+export const activationOf = (email) => db().activations?.[email.toLowerCase()] || null;
+export function setActivation(email, state) {
+  const d = db();
+  d.activations ||= {};
+  if (state) d.activations[email.toLowerCase()] = { ...state, at: Date.now() };
+  else delete d.activations[email.toLowerCase()];
+  saveStore();
+}
+
+onJobDone((job) => consume(job.owner, job.where));

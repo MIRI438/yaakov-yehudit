@@ -4,10 +4,13 @@
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import { config } from './config.js';
-import { findLinks, getMediaFromLink } from './extract.js';
+import { findLinks, getMediaFromLink, stripQuotedText } from './extract.js';
 import { sendReply, verifySending } from './mailer.js';
 import { checkModesty, moderationDescription, warmUpModeration } from './moderation.js';
-import { consume, PRICING, quotaFor, whoIsEmail } from './web/accounts.js';
+import {
+  activationOf, checkVerification, consume, linkEmail, maskPhone, normalizePhone, PRICING, quotaFor, setActivation, signOut,
+  startVerification, VERIFY, whoIsEmail,
+} from './web/accounts.js';
 import { detectSite, loadStore, recordStats } from './web/jobs.js';
 import { startWebServer } from './web/server.js';
 
@@ -53,6 +56,18 @@ async function handleMessage(source) {
   // A reply's subject ("Re: ...") repeats an earlier subject, so its links are not new.
   const incomingSubject = String(mail.subject || '').trim();
   let links = findLinks(mail.text, mail.html || '', incomingSubject);
+
+  // A sender that was asked to link a phone may be answering with the number or the code.
+  if (!whoIsEmail(sender).account && activationOf(sender)) {
+    const fresh = `${incomingSubject}\n${stripQuotedText(mail.text || '')}`.replace(/https?:\/\/\S+/g, ' ');
+    const answer = await activationStep(sender, fresh);
+    if (answer && (answer.done ? !links.length : true)) {
+      await sendReply(plainReply(mail, replyTo, answer.text));
+      log(`activation for ${sender}: ${answer.log}`);
+      return;
+    }
+  }
+
   if (links.length === 0) {
     log(`no supported link in message from ${sender}, ignoring`);
     return;
@@ -73,7 +88,13 @@ async function handleMessage(source) {
   }
   if (!links.length) {
     log(`quota used up for ${sender}`);
-    await sendReply(quotaReply(mail, replyTo, overQuota, who));
+    if (!who.account && VERIFY !== 'off') {
+      // The free trial of an email address is over: from now on it needs a phone (one per person).
+      setActivation(sender, { asked: true });
+      await sendReply(plainReply(mail, replyTo, ACTIVATION_TEXT));
+      return;
+    }
+    await sendReply(plainReply(mail, replyTo, quotaText(overQuota, who)));
     return;
   }
 
@@ -199,11 +220,44 @@ function quotaText(skipped, who) {
   return text;
 }
 
-function quotaReply(mail, to, skipped, who) {
+const ACTIVATION_TEXT =
+  `נגמרו ${PRICING.emailTrial} ההורדות לניסיון של כתובת המייל הזו.\n` +
+  `כדי להמשיך לקבל ${PRICING.freePerDay} הורדות חינם כל יום, צריך לחבר מספר טלפון (פעם אחת בלבד):\n` +
+  'השיבו למייל הזה עם מספר הטלפון שלכם (גם טלפון כשר או קו נייח), ותקבלו שיחה עם קוד של 6 ספרות.';
+
+/** Email-only phone linking. Returns { text, log, done } for a reply, or null when there is nothing to answer. */
+async function activationStep(sender, fresh) {
+  const state = activationOf(sender);
+  const phoneText = /(?:\+?972|0)[\d\s-]{8,13}\d/.exec(fresh)?.[0];
+  const phone = phoneText && normalizePhone(phoneText);
+  if (phone) {
+    const r = await startVerification(phone, 'call', `e:${sender}`).catch((err) => ({ error: err.message }));
+    if (r.error) return { text: `לא הצלחתי להתקשר: ${r.error}`, log: r.error };
+    setActivation(sender, { phone });
+    return { text: `מתקשרים עכשיו ל-${maskPhone(phone)} 📞\nהשיבו למייל הזה עם הקוד (6 ספרות) שיוקרא בשיחה.`, log: 'calling' };
+  }
+  const code = /(?<!\d)\d{6}(?!\d)/.exec(fresh)?.[0];
+  if (state.phone && code) {
+    const r = await checkVerification(state.phone, code, `e:${sender}`).catch((err) => ({ error: err.message }));
+    if (r.error) return { text: `${r.error}. נסו שוב, או שלחו שוב את מספר הטלפון כדי לקבל שיחה חדשה.`, log: r.error };
+    signOut(r.token); // email does not need a website session
+    const linked = linkEmail(r.phone, sender);
+    if (linked.error) return { text: linked.error, log: linked.error };
+    setActivation(sender, null);
+    return {
+      text: `✓ המייל מחובר למספר ${maskPhone(r.phone)}.\nעכשיו יש ${PRICING.freePerDay} הורדות חינם כל יום. שלחו שוב את הקישור.`,
+      log: 'linked',
+      done: true,
+    };
+  }
+  return { text: ACTIVATION_TEXT, log: 'asked again' };
+}
+
+function plainReply(mail, to, body) {
   return {
     to,
     subject: mail.subject ? (/^re:/i.test(mail.subject) ? mail.subject : `Re: ${mail.subject}`) : 'הקובץ שלך',
-    text: `שלום,\n\n${quotaText(skipped, who)}\n`,
+    text: `שלום,\n\n${body}\n`,
     attachments: [],
     inReplyTo: mail.messageId,
     references: [...(mail.references ? [].concat(mail.references) : []), mail.messageId].filter(Boolean),

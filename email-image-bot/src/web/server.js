@@ -138,12 +138,15 @@ async function route(req, res) {
     const visitor = visitorOf(req, res);
     const session = sessionOf(req);
     const who = whoIs(session, visitor);
+    // A signature of the device the page computes (screen, graphics card, fonts...): it stays when cookies are cleared.
+    const deviceSig = String(url.searchParams.get('d') || req.headers['x-device'] || '');
+    const where = { browser: visitor, device: /^[a-f0-9]{16,64}$/.test(deviceSig) ? deviceSig : '' };
 
     if (method === 'GET' && parts[1] === 'stats') return send(res, 200, stats());
 
     // My quota for today, plus how to reach the email bot.
     const me = () => ({
-      quota: quotaFor(who.key, pendingOf(who.key)),
+      quota: quotaFor(who.key, pendingOf(who.key), where),
       account: publicAccount(who.account),
       needsPhone: Boolean(who.needsPhone),
       payments: PAYMENTS,
@@ -172,7 +175,7 @@ async function route(req, res) {
         if (r.error) return send(res, 400, r);
         res.setHeader('set-cookie', `sid=${r.token}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`);
         const now = whoIs(r.token, visitor);
-        return send(res, 200, { ...me(), quota: quotaFor(now.key, pendingOf(now.key)), account: publicAccount(now.account), needsPhone: false });
+        return send(res, 200, { ...me(), quota: quotaFor(now.key, pendingOf(now.key), where), account: publicAccount(now.account), needsPhone: false });
       }
     }
     if (method === 'POST' && parts[1] === 'logout') {
@@ -206,14 +209,14 @@ async function route(req, res) {
       const links = findLinks(String(body.text || ''), '', '').slice(0, MAX_LINKS_PER_REQUEST);
       if (!links.length) return send(res, 400, { error: 'לא מצאתי קישור. הדביקו כתובת שמתחילה ב-https://' });
       if (who.needsPhone) return send(res, 401, { error: 'phone' });
-      const quota = quotaFor(who.key, pendingOf(who.key));
+      const quota = quotaFor(who.key, pendingOf(who.key), where);
       if (quota.on && quota.available < links.length) {
         return send(res, 402, { error: 'quota', quota });
       }
       if (!allowed(who.key, links.length)) {
         return send(res, 429, { error: 'הגעתם למגבלת השימוש לשעה. נסו שוב מעט מאוחר יותר.' });
       }
-      return send(res, 200, { jobs: links.map((l) => publicJob(createJob(l, visitor, who.key))) });
+      return send(res, 200, { jobs: links.map((l) => publicJob(createJob(l, visitor, who.key, where))) });
     }
 
     if (method === 'GET' && parts[1] === 'history') return send(res, 200, { jobs: historyFor(visitor) });

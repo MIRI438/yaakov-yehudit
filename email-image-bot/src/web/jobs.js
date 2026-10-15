@@ -124,7 +124,7 @@ const newId = () => randomBytes(9).toString('base64url');
 /** The public view of a job (what the browser sees). */
 export function publicJob(job) {
   if (!job) return null;
-  const { visitor, owner, ...rest } = job;
+  const { visitor, owner, where, ...rest } = job;
   return rest;
 }
 
@@ -142,12 +142,13 @@ function update(job) {
   events.emit(job.id, publicJob(job));
 }
 
-/** owner: who pays for it (quota key). */
-export function createJob(url, visitor, owner = '') {
+/** owner: who pays for it (quota key); where: the browser and device it came from. */
+export function createJob(url, visitor, owner = '', where = {}) {
   const job = {
     id: newId(),
     visitor,
     owner,
+    where,
     url,
     site: detectSite(url),
     status: 'queued',
