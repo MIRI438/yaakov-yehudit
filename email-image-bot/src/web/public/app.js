@@ -329,17 +329,21 @@ function renderJob(entry, job) {
   $('.zip-btn', el).hidden = job.files.length < 2;
 }
 
+// Where a stored file (or its video poster) is served.
+const fileUrl = (job, f) => f.url || `/files/${job.id}/${f.id}`;
+const posterUrl = (job, f) => f.posterUrl || `/files/${job.id}/${f.id}/poster`;
+
 function mediaCard(job, f) {
   const card = document.createElement('div');
   card.className = 'media-card';
   card.dataset.id = f.id;
-  const src = `/files/${job.id}/${f.id}`;
+  const src = fileUrl(job, f);
   const isVideo = f.type.startsWith('video/');
   const media = document.createElement(isVideo ? 'video' : 'img');
   media.src = src;
   if (isVideo) {
     Object.assign(media, { muted: true, loop: true, playsInline: true, preload: 'metadata' });
-    if (f.poster) media.poster = `${src}/poster`;
+    if (f.poster) media.poster = posterUrl(job, f);
     card.addEventListener('mouseenter', () => media.play().catch(() => {}));
     card.addEventListener('mouseleave', () => media.pause());
   } else {
@@ -431,7 +435,7 @@ function historyCard(j) {
   else if (j.status !== 'done') thumb.classList.add('pending');
   else if (first && !j.expired) {
     const isVideo = first.type.startsWith('video/');
-    const img = isVideo ? (first.poster ? `/files/${j.id}/${first.id}/poster` : '') : `/files/${j.id}/${first.id}`;
+    const img = isVideo ? (first.poster ? posterUrl(j, first) : '') : fileUrl(j, first);
     if (img) thumb.style.backgroundImage = `url("${img}")`;
     if (isVideo) thumb.insertAdjacentHTML('beforeend', '<span class="play">▶</span>');
     if (j.files.length > 1) thumb.insertAdjacentHTML('beforeend', `<span class="count">${j.files.length} files</span>`);
