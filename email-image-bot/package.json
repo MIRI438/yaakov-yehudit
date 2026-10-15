@@ -8,9 +8,14 @@
   },
   "license": "ISC",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.134.0",
+    "@tensorflow/tfjs": "^4.22.0",
+    "@tensorflow/tfjs-backend-wasm": "^4.22.0",
+    "buffer": "^6.0.3",
     "imapflow": "^2.4.0",
     "mailparser": "^3.9.38",
-    "nodemailer": "^10.1.0"
+    "nodemailer": "^10.1.0",
+    "nsfwjs": "^4.4.0"
   },
   "type": "module",
   "private": true,

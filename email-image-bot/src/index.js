@@ -6,6 +6,7 @@ import { simpleParser } from 'mailparser';
 import { config } from './config.js';
 import { findLinks, getMediaFromLink } from './extract.js';
 import { sendReply, verifySending } from './mailer.js';
+import { checkModesty, moderationDescription, warmUpModeration } from './moderation.js';
 
 const log = (...args) => console.log(new Date().toISOString(), ...args);
 
@@ -64,12 +65,33 @@ async function handleMessage(source) {
   let totalBytes = 0;
 
   const results = await Promise.allSettled(links.map((link) => getMediaFromLink(link)));
+  // Modesty filter: nothing is sent before it is checked.
+  let blocked = 0;
+  for (const [i, r] of results.entries()) {
+    if (r.status !== 'fulfilled') continue;
+    const kept = [];
+    for (const file of r.value) {
+      if (config.moderation !== 'off' && (file.tooLarge || !file.content)) {
+        // Too big to download, so it cannot be checked: not sent.
+        blocked++;
+        log(`not sent (too large to check): ${file.sourceUrl}`);
+        continue;
+      }
+      const verdict = await checkModesty(file);
+      if (verdict.allowed) kept.push(file);
+      else {
+        blocked++;
+        log(`blocked ${file.filename} from ${links[i]}: ${verdict.reason}`);
+      }
+    }
+    r.value = kept;
+  }
   results.forEach((r, i) => {
     if (r.status === 'rejected') {
       failures.push(`${links[i]}\n   ← ${r.reason?.message || r.reason}`);
       log(`link failed: ${links[i]} | ${r.reason?.message || r.reason}${r.reason?.diagnostics ? ` | ${r.reason.diagnostics}` : ''}`);
       // A picture of the page as the bot saw it explains most failures (blocked, login, consent...).
-      if (config.debugScreenshots && r.reason?.screenshot) {
+      if (config.debugScreenshots && config.moderation === 'off' && r.reason?.screenshot) {
         screenshots.push({ filename: `what-the-bot-saw-${i + 1}.png`, content: r.reason.screenshot, contentType: 'image/png' });
       }
       return;
@@ -95,10 +117,16 @@ async function handleMessage(source) {
   if (downloadLinks.length) {
     text += `\nקבצים שגדולים מדי לצירוף למייל, אפשר להוריד אותם כאן:\n${downloadLinks.map((u) => `• ${u}`).join('\n')}\n`;
   }
-  if (!attachments.length && !downloadLinks.length) text += 'לא הצלחתי להוריד תמונה או סרטון מהקישורים ששלחת.\n';
+  if (blocked) {
+    text += `\n${blocked === 1 ? 'קובץ אחד לא נשלח' : `${blocked} קבצים לא נשלחו`} כי לא עבר${blocked === 1 ? '' : 'ו'} את סינון הצניעות.\n`;
+  }
+  if (!attachments.length && !downloadLinks.length && !blocked) {
+    text += 'לא הצלחתי להוריד תמונה או סרטון מהקישורים ששלחת.\n';
+  }
   if (failures.length) text += `\nקישורים שלא הצליחו:\n${failures.map((f) => `• ${f}`).join('\n')}\n`;
   if (screenshots.length) text += '\nמצורף צילום מסך של הדף כפי שהבוט ראה אותו.\n';
 
+  text = text.replace(/\n{3,}/g, '\n\n');
   const subject = mail.subject ? (/^re:/i.test(mail.subject) ? mail.subject : `Re: ${mail.subject}`) : 'הקובץ שלך';
   const reply = {
     to: replyTo,
@@ -194,6 +222,12 @@ async function main() {
     process.exit(1);
   });
   log(`replies will be sent via ${via}`);
+  log(`modesty filter: ${moderationDescription()}`);
+  await warmUpModeration().then(
+    (status) => log(`modesty filter ${status}`),
+    // Fails closed: until this is fixed, files that need this check are not sent.
+    (err) => log(`MODESTY FILTER PROBLEM - files will not be sent until it is fixed: ${err.message}`),
+  );
   for (;;) {
     try {
       await start();

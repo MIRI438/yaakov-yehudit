@@ -60,6 +60,10 @@ export const config = {
   fetchTimeoutMs: num('FETCH_TIMEOUT_SECONDS', 20) * 1000,
   // Downloading the file itself (videos can take a while).
   downloadTimeoutMs: num('DOWNLOAD_TIMEOUT_SECONDS', 180) * 1000,
+  // Modesty filter: "on" (default) checks every image / video before it is sent; "off" disables it.
+  // With ANTHROPIC_API_KEY set, Claude also checks against a strict modesty standard.
+  moderation: (process.env.MODERATION || 'on').toLowerCase(),
+  moderationModel: process.env.MODERATION_MODEL || 'claude-opus-5-5',
   // Troubleshooting: attach a screenshot of a page that failed to the reply.
   debugScreenshots: bool('DEBUG_SCREENSHOTS', false),
   // If installed, use a headless browser for pages that only render with JavaScript.
