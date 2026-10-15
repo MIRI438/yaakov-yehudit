@@ -120,11 +120,12 @@ function stripQuotedHtml(html) {
 }
 
 /** Finds the links in the new (non-quoted) part of an email. */
-export function findLinks(text = '', html = '') {
+export function findLinks(text = '', html = '', subject = '') {
   const found = new Set();
   const urlRegex = /https?:\/\/[^\s<>"'()\[\]{}]+/gi;
   const hrefRegex = /href\s*=\s*["']([^"']+)["']/gi;
-  const ownText = stripQuotedText(text);
+  // People often paste the link into the subject line and leave the body empty.
+  const ownText = `${subject}\n${stripQuotedText(text)}`;
   const ownHtml = stripQuotedHtml(html);
 
   for (const m of ownHtml.matchAll(hrefRegex)) found.add(decodeEntities(m[1]));
@@ -711,7 +712,13 @@ const browserErrors = new Set([PRIVATE_MESSAGE, BLOCKED_MESSAGE]);
  * { filename, contentType, sourceUrl, content } or { ..., tooLarge: true } for a file too big to attach.
  * Throws an Error with a (Hebrew) user-facing message if nothing could be found.
  */
+// Sites whose terms forbid downloading their videos: the bot says so instead of trying.
+const NO_DOWNLOAD_SITES = ['youtube.com', 'youtu.be', 'youtube-nocookie.com'];
+
 export async function getMediaFromLink(link) {
+  if (hostIn(new URL(link).hostname.toLowerCase(), NO_DOWNLOAD_SITES)) {
+    throw new Error('הבוט לא מוריד סרטונים מיוטיוב: תנאי השימוש של יוטיוב אוסרים הורדה, והתוכן לרוב מוגן בזכויות יוצרים');
+  }
   await checkUrl(link, false);
   if (isChatShare(link)) {
     const all = await allMediaWithBrowser(link);

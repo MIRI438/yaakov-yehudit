@@ -46,7 +46,9 @@ async function handleMessage(source) {
     return;
   }
   // No Leonardo / Freepik / Magnific link: ignore the email completely (no reply).
-  const links = findLinks(mail.text, mail.html || '');
+  // The subject of a reply ("Re: ...") repeats an earlier subject, so only a fresh subject counts.
+  const freshSubject = /^(re|fwd?|תגובה|הועבר)\s*:/i.test(mail.subject || '') ? '' : mail.subject || '';
+  const links = findLinks(mail.text, mail.html || '', freshSubject);
   if (links.length === 0) {
     log(`no supported link in message from ${sender}, ignoring`);
     return;
