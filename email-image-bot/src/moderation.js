@@ -13,6 +13,7 @@ import { createRequire } from 'node:module';
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from './config.js';
+import { report } from './progress.js';
 import { withTempDir } from './video.js';
 
 const log = (...args) => console.log(new Date().toISOString(), ...args);
@@ -177,6 +178,7 @@ export function moderationDescription() {
  */
 export async function checkModesty(file) {
   if (config.moderation === 'off') return { allowed: true };
+  report('moderation', file.filename);
   const isVideo = file.contentType.startsWith('video/');
   try {
     return await withTempDir(async (dir) => {

@@ -8,6 +8,7 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { config } from './config.js';
+import { report } from './progress.js';
 
 const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
@@ -75,6 +76,7 @@ async function shrink(input, dir, maxBytes) {
  * { content } when it fits in the email, or null.
  */
 export async function streamToMp4(url) {
+  report('video');
   if (!(await hasFfmpeg())) return null;
   return withTempDir(async (dir) => {
     const full = path.join(dir, 'full.mp4');
@@ -97,6 +99,7 @@ export async function streamToMp4(url) {
 
 /** Re-encodes a downloaded video file to fit in an email. Returns a Buffer or null. */
 export async function shrinkVideoFile(file) {
+  report('video');
   if (!(await hasFfmpeg())) return null;
   return withTempDir(async (dir) => {
     try {

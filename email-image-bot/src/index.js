@@ -7,6 +7,8 @@ import { config } from './config.js';
 import { findLinks, getMediaFromLink } from './extract.js';
 import { sendReply, verifySending } from './mailer.js';
 import { checkModesty, moderationDescription, warmUpModeration } from './moderation.js';
+import { detectSite, recordStats } from './web/jobs.js';
+import { startWebServer } from './web/server.js';
 
 const log = (...args) => console.log(new Date().toISOString(), ...args);
 
@@ -71,7 +73,11 @@ async function handleMessage(source) {
   // Modesty filter: nothing is sent before it is checked.
   let blocked = 0;
   for (const [i, r] of results.entries()) {
-    if (r.status !== 'fulfilled') continue;
+    if (r.status !== 'fulfilled') {
+      recordStats({ site: detectSite(links[i]).key });
+      continue;
+    }
+    const blockedBefore = blocked;
     const kept = [];
     for (const file of r.value) {
       if (config.moderation !== 'off' && (file.tooLarge || !file.content)) {
@@ -88,6 +94,7 @@ async function handleMessage(source) {
       }
     }
     r.value = kept;
+    recordStats({ site: detectSite(links[i]).key, files: kept, blocked: blocked - blockedBefore });
   }
   results.forEach((r, i) => {
     if (r.status === 'rejected') {
@@ -216,14 +223,23 @@ async function start() {
 }
 
 async function main() {
+  // The website runs alongside the email bot (Railway passes PORT).
+  if (process.env.WEB !== 'off') {
+    await startWebServer().catch((err) => log('website failed to start:', err.message));
+  }
   log(`checking that replies can be sent (${config.sendScriptUrl ? 'Apps Script' : 'SMTP'})...`);
   const via = await verifySending().catch((err) => {
     console.error('Sending check failed:', err.message);
     if (!config.sendScriptUrl) {
       console.error('If this host blocks SMTP ports (e.g. Railway), set SEND_SCRIPT_URL - see README.');
     }
-    process.exit(1);
+    return null;
   });
+  if (!via) {
+    // Keep the website running even when email cannot work; retry email in 5 minutes via restart policy.
+    log('email bot disabled until sending works (website still running)');
+    return;
+  }
   log(`replies will be sent via ${via}`);
   log(`modesty filter: ${moderationDescription()}`);
   await warmUpModeration().then(

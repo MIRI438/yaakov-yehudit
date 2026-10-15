@@ -9,6 +9,7 @@ import { createWriteStream } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { report } from './progress.js';
 import { hasFfmpeg, shrinkVideoFile, streamToMp4, withTempDir } from './video.js';
 
 const USER_AGENT =
@@ -350,6 +351,7 @@ const MAX_BROWSERS = 2;
 let openBrowsers = 0;
 
 async function renderPage(chromium, pageUrl, fn, scroll) {
+  report('browser');
   const browser = await chromium.launch(
     process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {},
   );
@@ -670,6 +672,7 @@ async function exportFullImage(page, idx) {
 }
 
 async function downloadWithBrowser(page, url) {
+  report('download', url);
   // Redirects are followed one hop at a time so every hop gets the internal-network check
   // (Google's download links redirect to the actual file).
   let current = url;
@@ -689,6 +692,7 @@ async function downloadWithBrowser(page, url) {
 }
 
 async function downloadMedia(url) {
+  report('download', url);
   const { res, finalUrl } = await safeFetch(
     url, 'video/*,image/avif,image/webp,image/*,*/*;q=0.8', true, config.downloadTimeoutMs,
   );
@@ -780,12 +784,16 @@ export async function getMediaFromLink(link) {
 
 /** The main image / video behind a link (direct file, page meta tags, or the rendered page). */
 async function getMainMedia(link) {
+  report('fetch', link);
   // The link might already be a direct image / video.
   const { res, finalUrl } = await safeFetch(
     link, 'text/html,application/xhtml+xml,video/*,image/*;q=0.9,*/*;q=0.8', false, config.downloadTimeoutMs,
   );
   const type = contentTypeOf(res);
-  if (res.ok && isMediaType(type)) return toResult(res, finalUrl, type);
+  if (res.ok && isMediaType(type)) {
+    report('download', finalUrl);
+    return toResult(res, finalUrl, type);
+  }
   if (res.ok && isStream(type, finalUrl)) {
     res.body?.cancel().catch(() => {});
     const stream = await streamResult(finalUrl);
