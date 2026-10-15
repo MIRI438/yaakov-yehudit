@@ -392,13 +392,30 @@ async function describePage(page) {
     `big=${info.bigImages} videos=${JSON.stringify(info.videos.slice(0, 5))}`;
 }
 
+/** Some pages show a video only as a poster with a play button until it is clicked. */
+async function startVideos(page) {
+  const played = await page.evaluate(() => {
+    const buttons = [...document.querySelectorAll('button, [role="button"]')].filter((b) =>
+      /(^|\b)(play|הפעל|הפעלה)/i.test(b.getAttribute('aria-label') || b.title || ''),
+    );
+    buttons.slice(0, 10).forEach((b) => b.click());
+    document.querySelectorAll('video').forEach((v) => {
+      v.muted = true;
+      v.play?.().catch(() => {});
+    });
+    return buttons.length + document.querySelectorAll('video').length;
+  });
+  if (played) await page.waitForTimeout(2000);
+}
+
 /**
  * Candidate URLs for the page's main image / video, found by rendering it, best first:
  * files whose address contains the link's id, then the page's declared main media, then what is
  * shown biggest on the opening screen (the main picture, not thumbnails further down).
  */
-async function mediaUrlsWithBrowser(pageUrl, ids) {
-  const urls = await withBrowserPage(pageUrl, async (page, loaded) => {
+async function mainMediaWithBrowser(pageUrl, ids, { videoOnly, tried }) {
+  return withBrowserPage(pageUrl, async (page, loaded) => {
+    if (videoOnly) await startVideos(page);
     const html = await page.content();
     const onScreen = await page.evaluate(() => {
       const visibleArea = (el) => {
@@ -426,15 +443,23 @@ async function mediaUrlsWithBrowser(pageUrl, ids) {
     const everything = [...mediaUrlsFromHtml(html, pageUrl), ...onScreen.all, ...loaded.map((i) => i.url)];
     // Videos the page loaded in the background (often the real file behind a blob: player), biggest first.
     const netVideos = loaded.filter((i) => i.video).sort((a, b) => b.size - a.size).map((i) => i.url);
-    return [
+    const candidates = [...new Set([
       ...everything.filter((u) => matchesId(u, ids)),
       ...metaMediaUrls(html, pageUrl),
       ...onScreen.videos,
-      ...(onScreen.videos.length || onScreen.blobVideo ? netVideos.slice(0, 2) : []),
-      ...onScreen.images.slice(0, 2),
-    ];
+      ...(videoOnly || onScreen.videos.length || onScreen.blobVideo ? netVideos.slice(0, 3) : []),
+      ...(videoOnly ? [] : onScreen.images.slice(0, 2)),
+    ])].filter((u) => parseHttpUrl(u) && !tried.has(u)); // skips blob: streams
+    for (const url of candidates.slice(0, 10)) {
+      tried.add(url);
+      const media =
+        (await downloadMedia(url).catch(() => null)) ||
+        // Files some sites (e.g. Google) only serve to the browser session that opened the page.
+        (await downloadWithBrowser(page, url).catch(() => null));
+      if (media && (!videoOnly || media.contentType.startsWith('video/'))) return media;
+    }
+    return null;
   });
-  return [...new Set(urls || [])].filter((u) => parseHttpUrl(u)); // skips blob: streams
 }
 
 /**
@@ -443,19 +468,7 @@ async function mediaUrlsWithBrowser(pageUrl, ids) {
  */
 async function allMediaWithBrowser(pageUrl) {
   return withBrowserPage(pageUrl, async (page, loaded) => {
-    // Some chats show a video only as a poster with a play button until it is clicked.
-    const played = await page.evaluate(() => {
-      const buttons = [...document.querySelectorAll('button, [role="button"]')].filter((b) =>
-        /(^|\b)(play|הפעל|הפעלה)/i.test(b.getAttribute('aria-label') || b.title || ''),
-      );
-      buttons.slice(0, 10).forEach((b) => b.click());
-      document.querySelectorAll('video').forEach((v) => {
-        v.muted = true;
-        v.play?.().catch(() => {});
-      });
-      return buttons.length;
-    });
-    if (played) await page.waitForTimeout(2000);
+    await startVideos(page);
     // Every generated image / video in the chat, also inside shadow DOM. Each gets a marker so it can be
     // found again (to read a blob: from the page, or export the decoded picture at full resolution).
     const found = await page.evaluate(() => {
@@ -740,6 +753,8 @@ async function getMainMedia(link) {
     res.body?.cancel().catch(() => {});
   }
 
+  // A link to a video page must give the video, never its thumbnail image.
+  const videoOnly = /\/(videos?|clips?|reels?|watch|shorts)(\/|$)/i.test(new URL(link).pathname);
   const tried = new Set();
   const tryCandidates = async (list) => {
     for (const url of list) {
@@ -747,7 +762,7 @@ async function getMainMedia(link) {
       tried.add(url);
       try {
         const media = await downloadMedia(url);
-        if (media) return media;
+        if (media && (!videoOnly || media.contentType.startsWith('video/'))) return media;
       } catch {
         /* try the next one */
       }
@@ -760,12 +775,11 @@ async function getMainMedia(link) {
   if (direct) return direct;
 
   // 3. Page blocked us, or the file only appears after JavaScript runs.
-  const fromBrowser = await mediaUrlsWithBrowser(finalUrl, ids).catch((err) => {
+  const rendered = await mainMediaWithBrowser(finalUrl, ids, { videoOnly, tried }).catch((err) => {
     if (browserErrors.has(err.message)) throw err;
     console.error('browser fallback failed:', err.message);
-    return [];
+    return null;
   });
-  const rendered = await tryCandidates(fromBrowser.slice(0, 8));
   if (rendered) return rendered;
 
   // 4. Last resort (no browser available): any other image / video named in the page source.
@@ -773,5 +787,5 @@ async function getMainMedia(link) {
   if (other) return other;
 
   if (!res.ok) throw new Error(`האתר חסם את הגישה או שהקישור לא תקין (קוד ${res.status})`);
-  throw new Error('לא נמצאו תמונה או סרטון בקישור');
+  throw new Error(videoOnly ? 'לא נמצא סרטון שאפשר להוריד בקישור' : 'לא נמצאו תמונה או סרטון בקישור');
 }
