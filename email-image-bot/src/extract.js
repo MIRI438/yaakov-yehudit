@@ -103,30 +103,79 @@ async function checkUrl(url, anyPublicHost) {
   throw new Error(`הקישור מפנה לאתר לא מורשה: ${u.hostname}`);
 }
 
+// Invisible direction marks that Gmail and Outlook put around Hebrew text.
+const BIDI_MARKS = /[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+
+// Where the quoted earlier messages start in the plain-text part of a reply (Gmail / Apple / Outlook,
+// English and Hebrew). A header may be wrapped over several lines when the sender's name is long.
+const TEXT_QUOTE_STARTS = [
+  /^On\s[\s\S]{0,400}?\swrote:[ \t]*$/m, // Gmail / Apple: "On Mon, ... Name <a@b> wrote:"
+  /^בתאריך\s[\s\S]{0,400}?:[ \t]*$/m, // Gmail in Hebrew: "בתאריך יום ה׳, ... מאת Name <a@b>:"
+  /^-{2,}\s*(Original Message|הודעה מקורית)\s*-{2,}/im,
+  /^_{10,}[ \t]*$/m, // Outlook separator line
+  /^(From|מאת):[^\n]*\n(?:[^\n]*\n){0,3}?(Sent|Date|נשלח|תאריך):/m, // Outlook header block
+];
+const TEXT_FORWARD_STARTS = [
+  /^-{3,}\s*(Forwarded message|הודעה שהועברה)\s*-{3,}/im,
+  /^Begin forwarded message:/im,
+];
+
+// Where the quoted earlier messages start in the HTML part.
+const HTML_QUOTE_STARTS = [
+  /<div[^>]*class=["'][^"']*gmail_quote/i, // Gmail (also wraps forwarded messages)
+  /<blockquote/i, // Apple Mail, Thunderbird, most others
+  /<div[^>]*id=["'](divRplyFwdMsg|appendonsend)/i, // Outlook
+  /<hr[^>]*id=["']stopSpelling/i, // Outlook.com
+  /<div[^>]*class=["'][^"']*(moz-cite-prefix|yahoo_quoted|OutlookMessageHeader)/i, // Thunderbird / Yahoo / Outlook
+  /<div[^>]*style=["'][^"']*border-top:\s*solid\s*#E1E1E1/i, // Outlook desktop header block
+];
+
+/** Everything before the earliest of the given markers. */
+function cutAtFirst(content, markers) {
+  let cut = content.length;
+  for (const marker of markers) {
+    const m = marker.exec(content);
+    if (m && m.index < cut) cut = m.index;
+  }
+  return content.slice(0, cut);
+}
+
 /** Removes the quoted earlier messages from a reply, so links from old emails are not re-sent. */
 function stripQuotedText(text) {
-  const lines = String(text).split(/\r?\n/);
-  const cut = lines.findIndex((line) => {
-    const l = line.replace(/[\u200e\u200f\u202a-\u202e]/g, '').trim(); // Gmail wraps Hebrew in direction marks
-    return /^(On .+ wrote:|בתאריך .+:|-{2,}\s*Original Message\s*-{2,}|-{5,}\s*Forwarded message)/i.test(l);
-  });
-  return (cut >= 0 ? lines.slice(0, cut) : lines).filter((l) => !l.trimStart().startsWith('>')).join('\n');
+  const clean = String(text).replace(BIDI_MARKS, '');
+  return cutAtFirst(clean, [...TEXT_QUOTE_STARTS, ...TEXT_FORWARD_STARTS])
+    .split(/\r?\n/)
+    .filter((l) => !l.trimStart().startsWith('>'))
+    .join('\n');
 }
 
 function stripQuotedHtml(html) {
-  return String(html)
-    .replace(/<div[^>]*class=["'][^"']*gmail_quote[\s\S]*$/i, '')
-    .replace(/<blockquote[\s\S]*?<\/blockquote>/gi, '');
+  return cutAtFirst(String(html), HTML_QUOTE_STARTS);
+}
+
+/** Is this email a forward (where the forwarded message itself is what the sender wants processed)? */
+function isForward(text, subject) {
+  return /^(fwd?|fw|הועבר)\s*:/i.test(String(subject).trim()) ||
+    TEXT_FORWARD_STARTS.some((m) => m.test(String(text).replace(BIDI_MARKS, '')));
 }
 
 /** Finds the links in the new (non-quoted) part of an email. */
 export function findLinks(text = '', html = '', subject = '') {
+  // A reply's subject ("Re: ...") repeats an earlier subject, so its links are not new.
+  const freshSubject = /^(re|תגובה)\s*:/i.test(subject.trim())
+    ? ''
+    : subject.trim().replace(/^(fwd?|fw|הועבר)\s*:\s*/i, '');
+  const own = collectLinks(`${freshSubject}\n${stripQuotedText(text)}`, stripQuotedHtml(html));
+  // A forward with nothing added: the links are in the forwarded message itself.
+  if (!own.length && isForward(text, subject)) return collectLinks(String(text).replace(BIDI_MARKS, ''), html);
+  return own;
+}
+
+// People often paste the link into the subject line and leave the body empty, so the caller passes it.
+function collectLinks(ownText, ownHtml) {
   const found = new Set();
   const urlRegex = /https?:\/\/[^\s<>"'()\[\]{}]+/gi;
   const hrefRegex = /href\s*=\s*["']([^"']+)["']/gi;
-  // People often paste the link into the subject line and leave the body empty.
-  const ownText = `${subject}\n${stripQuotedText(text)}`;
-  const ownHtml = stripQuotedHtml(html);
 
   for (const m of ownHtml.matchAll(hrefRegex)) found.add(decodeEntities(m[1]));
   for (const m of `${ownText}\n${ownHtml}`.matchAll(urlRegex)) found.add(decodeEntities(m[0]));
