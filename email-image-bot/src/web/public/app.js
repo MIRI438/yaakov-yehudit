@@ -140,7 +140,7 @@ async function loadStats() {
 
 // ---------- quota: free downloads today + paid packs ----------
 
-let me = null; // { quota, payments, botEmail }
+let me = null; // { quota, account, needsPhone, payments, botEmail }
 let pendingText = ''; // what was pasted when the free downloads ran out
 async function loadMe() {
   try {
@@ -159,6 +159,7 @@ function renderQuota() {
     m.href = `mailto:${me.botEmail}`;
     $('b', m).textContent = me.botEmail;
   }
+  renderAccount();
   if (!q?.on) return;
   btn.hidden = false;
   const left = q.freeLeft + q.credits;
@@ -172,6 +173,7 @@ function renderQuota() {
 function openPaywall() {
   const q = me?.quota;
   if (!q) return;
+  if (me.needsPhone) return openPhone();
   const empty = q.freeLeft + q.credits === 0;
   $('#pay-used').textContent = Math.min(q.usedToday, q.freePerDay);
   $('#pay-free').textContent = q.freePerDay;
@@ -179,11 +181,134 @@ function openPaywall() {
   $('#pack-size').textContent = q.packSize;
   $('#pack-price').textContent = q.packPrice;
   $('#pay-title').textContent = empty ? 'נגמרו ההורדות החינמיות להיום'
-    : q.credits ? `נשארו לך ${q.freeLeft + q.credits} הורדות` : `נשארו ${q.freeLeft} הורדות חינם היום`;
+    : (q.freeLeft + q.credits === 1 ? 'נשארה הורדה אחת' : `נשארו ${q.freeLeft + q.credits} הורדות`) + (q.credits ? '' : ' חינם היום');
   $('#pay-note').firstChild.textContent = me.payments === 'off' ? 'התשלום נפתח בקרוב · מחר שוב ' : 'לא פג תוקף · מחר שוב ';
   $('#paywall').hidden = false;
 }
 const closePaywall = () => { $('#paywall').hidden = true; };
+const api = async (path, body) => {
+  const res = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(data.error || 'משהו השתבש'), { status: res.status });
+  return data;
+};
+const resumePending = () => {
+  if (!pendingText) return;
+  input.value = pendingText;
+  pendingText = '';
+  refreshComposer();
+  form.requestSubmit();
+};
+const bad = (el) => { el.classList.remove('bad'); void el.offsetWidth; el.classList.add('bad'); el.focus(); };
+
+// ---------- one-time phone check (a call, since many kosher phones have no SMS) ----------
+
+const phoneModal = $('#phone-modal');
+let phoneNumber = '';
+function openPhone() {
+  $('#phone-free').textContent = me?.quota?.freePerDay ?? 8;
+  $('#phone-title').textContent = 'אימות חד-פעמי';
+  $('#phone-form').hidden = false;
+  $('#code-form').hidden = true;
+  phoneModal.hidden = false;
+  setTimeout(() => $('#phone-input').focus(), 50);
+}
+const closePhone = () => { phoneModal.hidden = true; };
+$('#phone-close').addEventListener('click', closePhone);
+phoneModal.addEventListener('click', (e) => { if (e.target === phoneModal) closePhone(); });
+async function sendCode(channel) {
+  const field = $('#phone-input');
+  if (!/^[\d\s+()-]{9,16}$/.test(field.value.trim())) { bad(field); return toast('מספר טלפון לא תקין', 'err'); }
+  try {
+    await api('/api/phone/start', { phone: field.value, channel });
+    phoneNumber = field.value;
+    $('#phone-form').hidden = true;
+    $('#code-form').hidden = false;
+    $('#phone-title').textContent = channel === 'sms' ? 'הקוד מה-SMS' : 'הקוד מהשיחה';
+    $('#code-input').value = '';
+    $('#code-input').focus();
+    toast(channel === 'sms' ? 'שלחנו SMS עם קוד' : 'מתקשרים אליך עכשיו 📞', 'ok');
+  } catch (err) {
+    bad(field);
+    toast(err.message, 'err');
+  }
+}
+$('#phone-form').addEventListener('submit', (e) => { e.preventDefault(); sendCode('call'); });
+$('#sms-btn').addEventListener('click', () => sendCode('sms'));
+$('#code-again').addEventListener('click', () => { $('#phone-title').textContent = 'אימות חד-פעמי'; $('#phone-form').hidden = false; $('#code-form').hidden = true; $('#phone-input').focus(); });
+// Six digits = done, no button needed.
+$('#code-input').addEventListener('input', async (e) => {
+  const field = e.target;
+  field.value = field.value.replace(/\D/g, '').slice(0, 6);
+  if (field.value.length < 6) return;
+  try {
+    me = await api('/api/phone/check', { phone: phoneNumber, code: field.value });
+    renderQuota();
+    closePhone();
+    confetti();
+    toast('מאומת ✓', 'ok');
+    resumePending();
+  } catch (err) {
+    bad(field);
+    field.value = '';
+    toast(err.message, 'err');
+  }
+});
+
+// ---------- account: phone + linked email addresses ----------
+
+function renderAccount() {
+  const a = me?.account;
+  $('#acct').hidden = !a;
+  if (!a) return;
+  $('#acct-phone').textContent = a.phone;
+  const list = $('#acct-emails');
+  list.textContent = '';
+  for (const email of a.emails) {
+    const row = document.createElement('div');
+    row.className = 'acct-row';
+    row.innerHTML = '<span>📧 <b dir="ltr"></b></span>';
+    $('b', row).textContent = email;
+    row.append(iconButton('✕', 'ניתוק', async () => {
+      try { me = await api('/api/email/remove', { email }); renderQuota(); } catch (err) { toast(err.message, 'err'); }
+    }));
+    list.append(row);
+  }
+}
+$('#email-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const field = $('#email-input');
+  try {
+    await api('/api/email/start', { email: field.value });
+    $('#email-form').hidden = true;
+    $('#email-code-form').hidden = false;
+    $('#email-code').focus();
+    toast('שלחנו קוד למייל', 'ok');
+  } catch (err) {
+    bad(field);
+    toast(err.message, 'err');
+  }
+});
+$('#email-code-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    me = await api('/api/email/check', { code: $('#email-code').value });
+    $('#email-form').hidden = false;
+    $('#email-code-form').hidden = true;
+    $('#email-input').value = '';
+    $('#email-code').value = '';
+    renderQuota();
+    toast('המייל חובר ✓ ההורדות משותפות', 'ok');
+  } catch (err) {
+    bad($('#email-code'));
+    toast(err.message, 'err');
+  }
+});
+$('#logout').addEventListener('click', async () => {
+  await api('/api/logout').catch(() => {});
+  closePaywall();
+  loadMe();
+});
 $('#quota-btn').addEventListener('click', openPaywall);
 $('#pay-close').addEventListener('click', closePaywall);
 $('#paywall').addEventListener('click', (e) => { if (e.target.id === 'paywall') closePaywall(); });
@@ -191,16 +316,14 @@ $('#pay-buy').addEventListener('click', async () => {
   const btn = $('#pay-buy');
   btn.disabled = true;
   try {
-    const res = await fetch('/api/buy', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"packs":1}' });
-    const body = await res.json();
-    if (!res.ok) throw new Error(body.error || 'התשלום לא עבר');
-    me.quota = body.quota;
+    me = await api('/api/buy', { packs: 1 });
     renderQuota();
     closePaywall();
     confetti();
     toast(`+${me.quota.packSize} הורדות ✦`, 'ok');
-    if (pendingText) { input.value = pendingText; pendingText = ''; refreshComposer(); form.requestSubmit(); }
+    resumePending();
   } catch (err) {
+    if (err.status === 401) { closePaywall(); return openPhone(); }
     toast(err.message, 'err');
   } finally {
     btn.disabled = false;
@@ -265,6 +388,11 @@ form.addEventListener('submit', async (e) => {
   try {
     const res = await fetch('/api/jobs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) });
     const body = await res.json();
+    if (res.status === 401) {
+      pendingText = text;
+      openPhone();
+      return;
+    }
     if (res.status === 402) {
       me = { ...me, quota: body.quota };
       renderQuota();
@@ -644,7 +772,8 @@ $('#studio-close').addEventListener('click', closeStudio);
 modal.addEventListener('click', (e) => { if (e.target === modal) closeStudio(); });
 addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
-  if (!$('#paywall').hidden) closePaywall();
+  if (!phoneModal.hidden) closePhone();
+  else if (!$('#paywall').hidden) closePaywall();
   else if (!modal.hidden) closeStudio();
   else closeDrawer();
 });

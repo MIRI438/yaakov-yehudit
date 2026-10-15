@@ -118,6 +118,27 @@ button { font: inherit; color: inherit; }
 .pack-price i { font-family: Arial, var(--body); font-style: normal; font-weight: 700; font-size: .8em; margin-inline-end: 2px; }
 .pay-note { margin: 14px 0 0; font-size: 13px; color: var(--faint); }
 
+.pay-icon { font-size: 44px; line-height: 1; }
+.pay-sub { margin: -14px 0 20px; color: var(--muted); }
+.phone-step { display: grid; gap: 12px; }
+.big-input {
+  width: 100%; padding: 15px 18px; border-radius: 16px; font: 600 22px var(--display); letter-spacing: .04em; text-align: center;
+  color: var(--text); background: rgba(255,255,255,.06); border: 1px solid var(--stroke-2); outline: none; transition: border-color .2s;
+}
+.big-input:focus { border-color: var(--violet); box-shadow: 0 0 0 4px rgba(139,92,246,.18); }
+.big-input.code { font-size: 30px; letter-spacing: .35em; }
+.big-input.bad { border-color: var(--red); animation: shake .4s; }
+.call-btn { justify-content: center; font-weight: 800; font-size: 17px; }
+.link-btn { background: none; border: 0; color: var(--muted); font: inherit; font-size: 14px; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.link-btn:hover { color: var(--text); }
+.acct { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--stroke); display: grid; gap: 10px; font-size: 14px; color: var(--muted); text-align: start; }
+.acct-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.acct-row b { color: var(--text); }
+.mini-form { display: flex; gap: 8px; }
+.mini-form input { flex: 1; min-width: 0; padding: 10px 12px; border-radius: 12px; font: inherit; color: var(--text); background: rgba(255,255,255,.05); border: 1px solid var(--stroke); outline: none; }
+.mini-form input:focus { border-color: var(--violet); }
+.mini-btn { padding: 0 14px; border-radius: 12px; border: 1px solid var(--stroke-2); background: var(--surface-2); color: var(--text); font: inherit; font-weight: 700; cursor: pointer; }
+
 .mail-way { text-decoration: none; color: var(--muted); }
 .mail-way b { color: var(--text); font-weight: 600; }
 .mail-way:hover b { color: var(--pink); }

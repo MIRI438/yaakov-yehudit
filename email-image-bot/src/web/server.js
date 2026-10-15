@@ -8,9 +8,14 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findLinks } from '../extract.js';
+import { sendReply } from '../mailer.js';
 import {
-  addCredits, createJob, deleteJob, detectSite, filePath, getJob, historyFor, loadStore, onJobUpdate, publicJob,
-  quotaFor, setStar, stats, zipJob,
+  addCredits, checkEmailLink, checkVerification, publicAccount, quotaFor, signOut, startEmailLink, startVerification,
+  unlinkEmail, VERIFY, whoIs,
+} from './accounts.js';
+import {
+  createJob, deleteJob, detectSite, filePath, getJob, historyFor, loadStore, onJobUpdate, publicJob, setStar, stats,
+  store, zipJob,
 } from './jobs.js';
 
 const log = (...args) => console.log(new Date().toISOString(), ...args);
@@ -61,17 +66,22 @@ function visitorOf(req, res) {
   return vid;
 }
 
-const clientIp = (req) => String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+const sessionOf = (req) => /(?:^|;\s*)sid=([\w-]{20,})/.exec(req.headers.cookie || '')?.[1] || '';
 
-const recent = new Map(); // ip -> timestamps
-function allowed(ip, count) {
+// Filtered internet often sends many people through the same address, so limits follow the user, not the IP.
+const recent = new Map(); // quota key -> timestamps
+function allowed(key, count) {
   const hourAgo = Date.now() - 60 * 60 * 1000;
-  const times = (recent.get(ip) || []).filter((t) => t > hourAgo);
+  const times = (recent.get(key) || []).filter((t) => t > hourAgo);
   if (times.length + count > MAX_LINKS_PER_HOUR) return false;
   for (let i = 0; i < count; i++) times.push(Date.now());
-  recent.set(ip, times);
+  recent.set(key, times);
   return true;
 }
+
+/** Links of this user still being processed (they will use the quota when they finish). */
+const pendingOf = (key) =>
+  Object.values(store().jobs).filter((j) => j.owner === key && (j.status === 'queued' || j.status === 'running')).length;
 
 async function serveStatic(res, file) {
   const full = path.join(PUBLIC_DIR, file);
@@ -126,19 +136,61 @@ async function route(req, res) {
 
   if (parts[0] === 'api') {
     const visitor = visitorOf(req, res);
+    const session = sessionOf(req);
+    const who = whoIs(session, visitor);
 
     if (method === 'GET' && parts[1] === 'stats') return send(res, 200, stats());
 
     // My quota for today, plus how to reach the email bot.
-    if (method === 'GET' && parts[1] === 'me') {
-      return send(res, 200, { quota: quotaFor(visitor, clientIp(req)), payments: PAYMENTS, botEmail: process.env.EMAIL_ADDRESS || '' });
-    }
+    const me = () => ({
+      quota: quotaFor(who.key, pendingOf(who.key)),
+      account: publicAccount(who.account),
+      needsPhone: Boolean(who.needsPhone),
+      payments: PAYMENTS,
+      botEmail: process.env.EMAIL_ADDRESS || '',
+    });
+    if (method === 'GET' && parts[1] === 'me') return send(res, 200, me());
 
     if (method === 'POST' && parts[1] === 'buy') {
+      if (who.needsPhone) return send(res, 401, { error: 'phone' });
       if (PAYMENTS !== 'demo') return send(res, 503, { error: 'התשלום עוד לא פתוח. נפתח בקרוב.' });
       const body = await readJson(req).catch(() => ({}));
-      addCredits(visitor, Math.min(Math.max(Number(body.packs) || 1, 1), 10), { provider: 'demo' });
-      return send(res, 200, { quota: quotaFor(visitor, clientIp(req)) });
+      addCredits(who.key, Math.min(Math.max(Number(body.packs) || 1, 1), 10), { provider: 'demo' });
+      return send(res, 200, me());
+    }
+
+    // Phone verification: a call (or SMS) with a code, once per device.
+    if (method === 'POST' && parts[1] === 'phone') {
+      if (VERIFY === 'off') return send(res, 404, { error: 'לא נדרש אימות' });
+      const body = await readJson(req).catch(() => ({}));
+      if (parts[2] === 'start') {
+        const r = await startVerification(body.phone, body.channel, visitor);
+        return send(res, r.error ? 400 : 200, r);
+      }
+      if (parts[2] === 'check') {
+        const r = await checkVerification(body.phone, body.code, visitor);
+        if (r.error) return send(res, 400, r);
+        res.setHeader('set-cookie', `sid=${r.token}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`);
+        const now = whoIs(r.token, visitor);
+        return send(res, 200, { ...me(), quota: quotaFor(now.key, pendingOf(now.key)), account: publicAccount(now.account), needsPhone: false });
+      }
+    }
+    if (method === 'POST' && parts[1] === 'logout') {
+      if (session) signOut(session);
+      res.setHeader('set-cookie', 'sid=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax');
+      return send(res, 200, { ok: true });
+    }
+
+    // Linking an email address, so the email bot uses the same quota and balance.
+    if (method === 'POST' && parts[1] === 'email') {
+      if (!who.account) return send(res, 401, { error: 'phone' });
+      const body = await readJson(req).catch(() => ({}));
+      let r;
+      if (parts[2] === 'start') r = await startEmailLink(who.account.phone, body.email, sendReply);
+      else if (parts[2] === 'check') r = checkEmailLink(who.account.phone, body.code);
+      else if (parts[2] === 'remove') r = (unlinkEmail(who.account.phone, String(body.email || '')), { ok: true });
+      else return send(res, 404, { error: 'לא נמצא' });
+      return send(res, r.error ? 400 : 200, r.error ? r : me());
     }
 
     // Which site a link belongs to (for the live badge while typing).
@@ -153,14 +205,15 @@ async function route(req, res) {
       }
       const links = findLinks(String(body.text || ''), '', '').slice(0, MAX_LINKS_PER_REQUEST);
       if (!links.length) return send(res, 400, { error: 'לא מצאתי קישור. הדביקו כתובת שמתחילה ב-https://' });
-      const quota = quotaFor(visitor, clientIp(req));
+      if (who.needsPhone) return send(res, 401, { error: 'phone' });
+      const quota = quotaFor(who.key, pendingOf(who.key));
       if (quota.on && quota.available < links.length) {
         return send(res, 402, { error: 'quota', quota });
       }
-      if (!allowed(clientIp(req), links.length)) {
+      if (!allowed(who.key, links.length)) {
         return send(res, 429, { error: 'הגעתם למגבלת השימוש לשעה. נסו שוב מעט מאוחר יותר.' });
       }
-      return send(res, 200, { jobs: links.map((l) => publicJob(createJob(l, visitor, clientIp(req)))) });
+      return send(res, 200, { jobs: links.map((l) => publicJob(createJob(l, visitor, who.key))) });
     }
 
     if (method === 'GET' && parts[1] === 'history') return send(res, 200, { jobs: historyFor(visitor) });

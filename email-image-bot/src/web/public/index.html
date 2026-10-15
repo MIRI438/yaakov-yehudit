@@ -29,7 +29,7 @@
       <span class="brand-name">Linkra</span>
     </a>
     <button class="quota-pill" id="quota-btn" type="button" dir="ltr" title="הורדות שנשארו היום" hidden>
-      <span class="q-ring" id="quota-ring"></span><b id="quota-left">10</b><span class="q-of" id="quota-of">/10</span>
+      <span class="q-ring" id="quota-ring"></span><b id="quota-left">8</b><span class="q-of" id="quota-of">/8</span>
     </button>
     <button class="history-btn" id="open-history" type="button" aria-label="ההיסטוריה שלי">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 3"/></svg>
@@ -66,7 +66,7 @@
         <li><span class="step-ico">🔗</span>מדביקים קישור</li>
         <li><span class="step-ico">↓</span>מקבלים קובץ</li>
       </ol>
-      <p class="trust"><span>✓ סינון צניעות</span><span>✓ איכות מקורית</span><span id="trust-free">✓ 10 חינם ביום</span></p>
+      <p class="trust"><span>✓ סינון צניעות</span><span>✓ איכות מקורית</span><span id="trust-free">✓ 8 חינם ביום</span></p>
 
       <div class="recents" id="recents" hidden>
         <div class="recents-track" id="recents-track"></div>
@@ -130,13 +130,44 @@
   <div class="paywall" id="paywall" hidden>
     <div class="pay-card" role="dialog" aria-modal="true" aria-labelledby="pay-title">
       <button class="icon-btn pay-close" id="pay-close" type="button" aria-label="סגירה">✕</button>
-      <div class="pay-meter" dir="ltr"><span id="pay-used">10</span><small>/<span id="pay-free">10</span></small></div>
+      <div class="pay-meter" dir="ltr"><span id="pay-used">8</span><small>/<span id="pay-free">8</span></small></div>
       <h2 id="pay-title">נגמרו ההורדות החינמיות להיום</h2>
       <button class="pack" id="pay-buy" type="button">
         <span class="pack-n">+<b id="pack-size">10</b> הורדות</span>
         <span class="pack-price" dir="ltr"><i>₪</i><b id="pack-price">2</b></span>
       </button>
-      <p class="pay-note" id="pay-note">לא פג תוקף · מחר שוב <span id="pay-free2">10</span> חינם</p>
+      <p class="pay-note" id="pay-note">לא פג תוקף · מחר שוב <span id="pay-free2">8</span> חינם</p>
+      <div class="acct" id="acct" hidden>
+        <div class="acct-row"><span>📞 <b id="acct-phone" dir="ltr"></b></span><button class="link-btn" id="logout" type="button">יציאה</button></div>
+        <div id="acct-emails"></div>
+        <form class="mini-form" id="email-form">
+          <input id="email-input" type="email" placeholder="📧 חיבור מייל" dir="ltr" autocomplete="email" />
+          <button class="mini-btn" type="submit">חיבור</button>
+        </form>
+        <form class="mini-form" id="email-code-form" hidden>
+          <input id="email-code" inputmode="numeric" maxlength="6" placeholder="הקוד שנשלח למייל" dir="ltr" autocomplete="one-time-code" />
+          <button class="mini-btn" type="submit">אישור</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- one-time phone check -->
+  <div class="paywall" id="phone-modal" hidden>
+    <div class="pay-card" role="dialog" aria-modal="true" aria-labelledby="phone-title">
+      <button class="icon-btn pay-close" id="phone-close" type="button" aria-label="סגירה">✕</button>
+      <div class="pay-icon">📞</div>
+      <h2 id="phone-title">אימות חד-פעמי</h2>
+      <p class="pay-sub"><span id="phone-free">8</span> הורדות חינם כל יום</p>
+      <form class="phone-step" id="phone-form">
+        <input class="big-input" id="phone-input" type="tel" inputmode="tel" placeholder="050-0000000" dir="ltr" autocomplete="tel" />
+        <button class="pack call-btn" type="submit">📞 התקשרו אליי עם קוד</button>
+        <button class="link-btn" id="sms-btn" type="button">או ב-SMS</button>
+      </form>
+      <form class="phone-step" id="code-form" hidden>
+        <input class="big-input code" id="code-input" inputmode="numeric" maxlength="6" placeholder="••••••" dir="ltr" autocomplete="one-time-code" />
+        <button class="link-btn" id="code-again" type="button">לא קיבלתי · שוב</button>
+      </form>
     </div>
   </div>
 

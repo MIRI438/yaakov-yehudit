@@ -7,7 +7,8 @@ import { config } from './config.js';
 import { findLinks, getMediaFromLink } from './extract.js';
 import { sendReply, verifySending } from './mailer.js';
 import { checkModesty, moderationDescription, warmUpModeration } from './moderation.js';
-import { detectSite, recordStats } from './web/jobs.js';
+import { consume, PRICING, quotaFor, whoIsEmail } from './web/accounts.js';
+import { detectSite, loadStore, recordStats } from './web/jobs.js';
 import { startWebServer } from './web/server.js';
 
 const log = (...args) => console.log(new Date().toISOString(), ...args);
@@ -51,7 +52,7 @@ async function handleMessage(source) {
   // The subject of a reply ("Re: ...") repeats an earlier subject, so only a fresh subject counts.
   // A reply's subject ("Re: ...") repeats an earlier subject, so its links are not new.
   const incomingSubject = String(mail.subject || '').trim();
-  const links = findLinks(mail.text, mail.html || '', incomingSubject);
+  let links = findLinks(mail.text, mail.html || '', incomingSubject);
   if (links.length === 0) {
     log(`no supported link in message from ${sender}, ignoring`);
     return;
@@ -61,6 +62,20 @@ async function handleMessage(source) {
     return;
   }
   log(`message from ${sender}: ${links.length} link(s)`);
+
+  // Same daily quota as the website (shared when the address is linked to a phone there).
+  const who = whoIsEmail(sender);
+  const quota = quotaFor(who.key);
+  let overQuota = 0;
+  if (quota.on && quota.available < links.length) {
+    overQuota = links.length - quota.available;
+    links = links.slice(0, quota.available);
+  }
+  if (!links.length) {
+    log(`quota used up for ${sender}`);
+    await sendReply(quotaReply(mail, replyTo, overQuota, who));
+    return;
+  }
 
   const attachments = [];
   const downloadLinks = []; // files too big to attach
@@ -94,6 +109,7 @@ async function handleMessage(source) {
       }
     }
     r.value = kept;
+    if (kept.length) consume(who.key);
     recordStats({ site: detectSite(links[i]).key, files: kept, blocked: blocked - blockedBefore });
   }
   results.forEach((r, i) => {
@@ -133,6 +149,7 @@ async function handleMessage(source) {
   if (!attachments.length && !downloadLinks.length && !blocked) {
     text += 'לא הצלחתי להוריד תמונה או סרטון מהקישורים ששלחת.\n';
   }
+  if (overQuota) text += `\n${quotaText(overQuota, who)}\n`;
   if (failures.length) text += `\nקישורים שלא הצליחו:\n${failures.map((f) => `• ${f}`).join('\n')}\n`;
   if (screenshots.length) text += '\nמצורף צילום מסך של הדף כפי שהבוט ראה אותו.\n';
 
@@ -169,6 +186,28 @@ async function handleMessage(source) {
     `replied to ${sender}: ${attachments.length} attached, ${downloadLinks.length} as link, ${failures.length} failed ` +
       `(${megabytes}MB, sent in ${((Date.now() - started) / 1000).toFixed(1)}s)`,
   );
+}
+
+function quotaText(skipped, who) {
+  const site = process.env.PUBLIC_URL;
+  let text = `${skipped === 1 ? 'קישור אחד לא טופל' : `${skipped} קישורים לא טופלו`} כי נגמרו ${PRICING.freePerDay} ההורדות החינמיות של היום. ` +
+    `מחר יהיו שוב ${PRICING.freePerDay}.`;
+  if (site) {
+    text += `\nאפשר להוסיף ${PRICING.packSize} הורדות ב-${PRICING.packPrice} ₪ באתר: ${site}`;
+    if (!who.account) text += '\n(באתר מחברים את המייל הזה למספר הטלפון, וההורדות שנקנו עובדות גם כאן.)';
+  }
+  return text;
+}
+
+function quotaReply(mail, to, skipped, who) {
+  return {
+    to,
+    subject: mail.subject ? (/^re:/i.test(mail.subject) ? mail.subject : `Re: ${mail.subject}`) : 'הקובץ שלך',
+    text: `שלום,\n\n${quotaText(skipped, who)}\n`,
+    attachments: [],
+    inReplyTo: mail.messageId,
+    references: [...(mail.references ? [].concat(mail.references) : []), mail.messageId].filter(Boolean),
+  };
 }
 
 // ---- mailbox watching ----
@@ -226,7 +265,7 @@ async function main() {
   // The website runs alongside the email bot (Railway passes PORT).
   if (process.env.WEB !== 'off') {
     await startWebServer().catch((err) => log('website failed to start:', err.message));
-  }
+  } else await loadStore(); // the email quota is kept there too
   log(`checking that replies can be sent (${config.sendScriptUrl ? 'Apps Script' : 'SMTP'})...`);
   const via = await verifySending().catch((err) => {
     console.error('Sending check failed:', err.message);
