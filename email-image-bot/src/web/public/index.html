@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Linkra · קישור נכנס, קובץ יוצא</title>
-  <meta name="description" content="מדביקים קישור מ-Gemini, ChatGPT, Leonardo, Freepik ועוד, ומקבלים את התמונה או הסרטון המקוריים. דפדפן חכם, דחיסת וידאו וסינון צניעות." />
+  <meta name="description" content="מדביקים קישור, מקבלים את התמונה או הסרטון באיכות המקורית." />
   <meta name="theme-color" content="#07060d" />
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -13,7 +13,6 @@
   <link rel="stylesheet" href="/assets/styles.css" />
 </head>
 <body>
-  <!-- living background -->
   <div class="aurora" aria-hidden="true">
     <span class="blob b1"></span><span class="blob b2"></span><span class="blob b3"></span><span class="blob b4"></span>
   </div>
@@ -21,7 +20,7 @@
   <div class="grid-lines" aria-hidden="true"></div>
 
   <header class="topbar">
-    <a class="brand" href="/" aria-label="Linkra - דף הבית">
+    <a class="brand" href="/" aria-label="Linkra">
       <svg class="brand-mark" viewBox="0 0 40 40" aria-hidden="true">
         <defs><linearGradient id="bm" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff4fa3"/><stop offset=".5" stop-color="#8b5cf6"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs>
         <rect x="2" y="2" width="36" height="36" rx="11" fill="url(#bm)"/>
@@ -29,144 +28,100 @@
       </svg>
       <span class="brand-name">Linkra</span>
     </a>
-    <nav class="nav">
-      <a href="#studio" class="nav-link">הסטודיו</a>
-      <a href="#history" class="nav-link">ההיסטוריה שלי</a>
-      <a href="#how" class="nav-link">איך זה עובד</a>
-    </nav>
-    <div class="live-pill" title="קבצים שחולצו עד היום">
-      <span class="pulse"></span><span id="stat-files">0</span>&nbsp;קבצים חולצו
+    <div class="live-pill" title="קבצים שחולצו">
+      <span class="pulse"></span><span id="stat-files">0</span>&nbsp;קבצים
     </div>
+    <button class="history-btn" id="open-history" type="button" aria-label="ההיסטוריה שלי">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 3"/></svg>
+      <span class="hb-count" id="history-count" hidden>0</span>
+    </button>
   </header>
 
   <main>
-    <!-- HERO + STUDIO -->
     <section class="hero" id="studio">
-      <div class="eyebrow reveal"><span class="spark">✦</span> מנוע חילוץ מדיה · דפדפן חכם · סינון צניעות</div>
-      <h1 class="headline reveal">
-        <span class="line">מדביקים קישור.</span>
-        <span class="line">מקבלים <em class="gradient-text">את המקור.</em></span>
+      <h1 class="headline">
+        <span class="line">קישור נכנס.</span>
+        <span class="line"><em class="gradient-text">קובץ יוצא.</em></span>
       </h1>
-      <p class="lede reveal">Linkra נכנסת לדף בשבילך, מוצאת את התמונה או הסרטון האמיתיים, מורידה באיכות המקורית, דוחסת כשצריך ובודקת צניעות. כל זה בשניות.</p>
 
-      <form class="composer reveal" id="composer" autocomplete="off">
+      <form class="composer" id="composer" autocomplete="off">
         <div class="composer-glow" aria-hidden="true"></div>
         <div class="composer-inner">
-          <div class="composer-top">
-            <span class="site-chip" id="site-chip" hidden><i class="dot"></i><b>Gemini</b></span>
-            <span class="hint" id="hint">הדביקו קישור אחד או כמה (כל אחד בשורה)</span>
-            <span class="kbd-hint"><kbd>Ctrl</kbd>+<kbd>Enter</kbd></span>
-          </div>
-          <textarea id="links" rows="2" placeholder="https://share.gemini.google/…" spellcheck="false" dir="ltr" aria-label="קישורים"></textarea>
-          <div class="composer-bottom">
-            <button type="button" class="ghost-btn" id="paste-btn">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6m-7 2h8a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z" /></svg>
-              הדבקה מהלוח
-            </button>
+          <div class="composer-row">
+            <span class="site-chip" id="site-chip" hidden><i class="dot"></i><b></b></span>
+            <textarea id="links" rows="1" placeholder="הדביקו קישור…" spellcheck="false" aria-label="קישור"></textarea>
             <span class="count-badge" id="count-badge" hidden></span>
-            <button type="submit" class="cta" id="submit-btn">
-              <span class="cta-label">חלצו לי את זה</span>
-              <span class="cta-icon" aria-hidden="true">✦</span>
+            <button type="submit" class="cta" id="submit-btn" aria-label="חילוץ">
+              <span class="cta-label">חלצו</span>
+              <svg class="cta-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l-6 6 6 6"/></svg>
             </button>
           </div>
         </div>
-        <div class="drop-overlay" aria-hidden="true">שחררו כאן את הקישור</div>
+        <div class="drop-overlay" aria-hidden="true">שחררו כאן</div>
       </form>
 
-      <div class="platforms reveal" aria-label="אתרים נתמכים">
-        <div class="marquee">
-          <div class="marquee-track" id="marquee"></div>
-        </div>
+      <ol class="steps" aria-label="איך זה עובד">
+        <li><span class="step-ico">⌘V</span>מדביקים</li>
+        <li><span class="step-ico">✦</span>מחלצים</li>
+        <li><span class="step-ico">↓</span>מורידים</li>
+      </ol>
+
+      <div class="recents" id="recents" hidden>
+        <div class="recents-track" id="recents-track"></div>
+        <button class="recents-all" id="recents-all" type="button">הכל</button>
       </div>
 
       <div id="jobs" class="jobs" aria-live="polite"></div>
     </section>
 
-    <!-- STATS STRIP -->
-    <section class="stats reveal" aria-label="נתונים">
-      <div class="stat"><b data-count="files" id="s-files">0</b><span>קבצים חולצו</span></div>
-      <div class="stat"><b data-count="links" id="s-links">0</b><span>קישורים טופלו</span></div>
-      <div class="stat"><b id="s-gb">0</b><span>נשלחו באיכות מקור</span></div>
-      <div class="stat"><b id="s-sites">0</b><span>אתרים שונים</span></div>
-    </section>
-
-    <!-- HISTORY -->
-    <section class="history" id="history">
-      <div class="section-head reveal">
-        <div>
-          <p class="kicker">הארכיון האישי</p>
-          <h2>כל מה ששלפת, במקום אחד</h2>
-        </div>
-        <div class="history-tools">
-          <label class="search">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>
-            <input id="search" type="search" placeholder="חיפוש לפי אתר או קישור" />
-          </label>
-          <div class="chips" id="filters" role="tablist">
-            <button class="chip active" data-filter="all">הכל</button>
-            <button class="chip" data-filter="image">תמונות</button>
-            <button class="chip" data-filter="video">סרטונים</button>
-            <button class="chip" data-filter="starred">★ מועדפים</button>
-            <button class="chip" data-filter="failed">לא הצליחו</button>
-          </div>
-        </div>
-      </div>
-      <div class="history-grid" id="history-grid"></div>
-      <div class="empty reveal" id="history-empty">
-        <div class="empty-orb" aria-hidden="true"></div>
-        <p>עוד לא חילצת כלום. הדביקי קישור למעלה וזה יופיע כאן.</p>
-      </div>
-    </section>
-
-    <!-- HOW -->
-    <section class="how" id="how">
-      <div class="section-head reveal">
-        <div>
-          <p class="kicker">מאחורי הקלעים</p>
-          <h2>לא סתם "שולחים ומקבלים"</h2>
-        </div>
-      </div>
-      <div class="bento">
-        <article class="tile t-wide reveal">
-          <span class="tile-num">01</span>
-          <h3>דפדפן חכם שנכנס בשבילך</h3>
-          <p>דפים כמו Gemini, ChatGPT ו-Flow בנויים ב-JavaScript. Linkra פותחת אותם בדפדפן אמיתי, לוחצת "הפעל", גוללת, ומוצאת את הקובץ שמסתתר מאחורי הנגן.</p>
-          <div class="tile-visual browser-visual" aria-hidden="true"><span></span><span></span><span></span><i></i></div>
-        </article>
-        <article class="tile reveal">
-          <span class="tile-num">02</span>
-          <h3>איכות מקור, לא צילום מסך</h3>
-          <p>רזולוציה מקורית, גם כשהתמונה מוצגת קטנה בדף.</p>
-        </article>
-        <article class="tile reveal">
-          <span class="tile-num">03</span>
-          <h3>וידאו בלי כאב ראש</h3>
-          <p>סרטונים מוזרמים מתאחדים לקובץ אחד, וכבדים נדחסים בלי לאבד אורך או סאונד.</p>
-        </article>
-        <article class="tile reveal">
-          <span class="tile-num">04</span>
-          <h3>סינון צניעות מובנה</h3>
-          <p>כל קובץ נבדק לפני שהוא מגיע אלייך. במקרה של ספק, הוא לא נשלח.</p>
-        </article>
-        <article class="tile reveal">
-          <span class="tile-num">05</span>
-          <h3>ארכיון ושיתוף</h3>
-          <p>כל חילוץ נשמר בהיסטוריה שלך עם חיפוש ומועדפים, ואפשר לשתף קישור לתוצאה או להוריד הכל כ-ZIP.</p>
-        </article>
-        <article class="tile t-full t-accent reveal">
-          <span class="tile-num">06</span>
-          <h3>שיחה שלמה, כל התמונות</h3>
-          <p>שולחים קישור שיתוף של שיחת AI ומקבלים את כל התמונות והסרטונים שנוצרו בה, בלי התמונות שהעלית בעצמך.</p>
-          <div class="tile-visual stack-visual" aria-hidden="true"><span></span><span></span><span></span></div>
-        </article>
-      </div>
+    <section class="platforms" aria-label="אתרים נתמכים">
+      <div class="marquee"><div class="marquee-track" id="marquee"></div></div>
     </section>
   </main>
 
   <footer class="footer">
-    <span>Linkra · נבנה באהבה ובהרבה שעות עבודה</span>
-    <span class="muted">קבצים נשמרים 7 ימים ואז נמחקים.</span>
+    <a class="bookmarklet" id="bookmarklet" href="#" title="גררו לסרגל הסימניות">⚡ Linkra לסרגל הסימניות</a>
+    <span class="muted">קבצים נמחקים אחרי 7 ימים</span>
   </footer>
+
+  <!-- history drawer -->
+  <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
+  <aside class="drawer" id="drawer" aria-label="ההיסטוריה שלי" aria-hidden="true">
+    <div class="drawer-head">
+      <h2>ההיסטוריה שלי</h2>
+      <button class="icon-btn" id="close-history" type="button" aria-label="סגירה">✕</button>
+    </div>
+    <label class="search">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>
+      <input id="search" type="search" placeholder="חיפוש" />
+    </label>
+    <div class="chips" id="filters">
+      <button class="chip active" data-filter="all" type="button">הכל</button>
+      <button class="chip" data-filter="image" type="button">תמונות</button>
+      <button class="chip" data-filter="video" type="button">סרטונים</button>
+      <button class="chip" data-filter="starred" type="button">★</button>
+    </div>
+    <div class="history-list" id="history-list"></div>
+    <p class="empty" id="history-empty" hidden>עוד אין כאן כלום</p>
+  </aside>
+
+  <!-- studio (tools for one file) -->
+  <div class="studio" id="studio-modal" hidden>
+    <div class="studio-panel" role="dialog" aria-modal="true" aria-label="סטודיו">
+      <div class="studio-preview">
+        <img id="studio-img" alt="" hidden />
+        <video id="studio-video" controls playsinline hidden></video>
+      </div>
+      <div class="studio-side">
+        <div class="studio-head">
+          <h2>✨ סטודיו</h2>
+          <button class="icon-btn" id="studio-close" type="button" aria-label="סגירה">✕</button>
+        </div>
+        <div class="tabs" id="studio-tabs" role="tablist"></div>
+        <div class="tab-body" id="studio-body"></div>
+      </div>
+    </div>
+  </div>
 
   <div class="toast-zone" id="toasts" aria-live="assertive"></div>
   <canvas id="confetti" aria-hidden="true"></canvas>
@@ -182,9 +137,10 @@
       <div class="job-msg" hidden></div>
       <div class="results"></div>
       <div class="job-actions" hidden>
-        <a class="pill-btn zip-btn" download>⬇ הורדת הכל (ZIP)</a>
-        <button class="pill-btn share-btn" type="button">🔗 העתקת קישור לתוצאה</button>
-        <span class="modesty-badge">✓ עבר סינון צניעות</span>
+        <a class="pill-btn zip-btn" download>⬇ הכל (ZIP)</a>
+        <button class="pill-btn share-btn" type="button">🔗 שיתוף</button>
+        <button class="pill-btn qr-btn" type="button">📱 לטלפון</button>
+        <span class="modesty-badge" title="עבר סינון צניעות">✓ צנוע</span>
       </div>
     </article>
   </template>
