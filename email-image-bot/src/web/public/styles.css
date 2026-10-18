@@ -143,6 +143,7 @@ button { font: inherit; color: inherit; }
 .recents, #open-history, .results, .job-actions { display: none !important; }
 .mail-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; padding: 10px 14px 4px; border-top: 1px solid var(--stroke); }
 .mail-row input { flex: 1; min-width: 0; background: none; border: 0; outline: none; color: var(--text); font: inherit; font-size: 17px; text-align: right; }
+.mail-row input:placeholder-shown { direction: rtl; }
 .mail-row input:not(:placeholder-shown) { text-align: left; }
 .mail-row input::placeholder { color: var(--faint); }
 .mail-row.bad { animation: shake .4s; }
@@ -152,9 +153,14 @@ button { font: inherit; color: inherit; }
 .job-mail.failed { color: var(--red); border-color: rgba(255,92,122,.35); }
 .job-mail b { direction: ltr; unicode-bidi: isolate; }
 
-.mail-way { text-decoration: none; color: var(--muted); }
-.mail-way b { color: var(--text); font-weight: 600; }
-.mail-way:hover b { color: var(--pink); }
+.mail-direct {
+  display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: center; margin-top: 16px;
+  padding: 10px 18px; border-radius: 999px; text-decoration: none; color: var(--muted); font-size: 15px;
+  background: var(--surface); border: 1px solid var(--stroke); transition: all .2s var(--ease);
+}
+.mail-direct b { color: var(--text); font-weight: 700; word-break: break-all; }
+.mail-direct:hover { border-color: var(--pink); color: var(--text); }
+.mail-direct:hover b { color: var(--pink); }
 
 .history-btn {
   position: relative; display: grid; place-items: center; width: 42px; height: 42px; border-radius: 13px; cursor: pointer;
