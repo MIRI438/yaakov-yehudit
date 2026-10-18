@@ -40,7 +40,8 @@ const deviceSig = (async () => {
   window.fetch = async (input, init = {}) => {
     const url = typeof input === 'string' ? input : input.url;
     if (!url.startsWith('/api/')) return plainFetch(input, init);
-    const sig = await deviceSig;
+    // Never let the signature hold up a request (some browsers are slow or refuse canvas / WebGL).
+    const sig = await Promise.race([deviceSig, new Promise((r) => setTimeout(() => r(''), 800))]);
     return plainFetch(input, { ...init, headers: { ...(init.headers || {}), 'x-device': sig } });
   };
 }
@@ -440,7 +441,8 @@ form.addEventListener('submit', async (e) => {
   try { localStorage.setItem('linkra-email', email); } catch { /* private mode */ }
   if (!askedNotify && 'Notification' in window && Notification.permission === 'default') {
     askedNotify = true;
-    Notification.requestPermission().catch(() => {});
+    // Older Safari returns nothing instead of a promise, and some frames refuse: never block the submit.
+    try { Notification.requestPermission()?.catch?.(() => {}); } catch { /* not allowed here */ }
   }
   const btn = $('#submit-btn');
   btn.disabled = true;
