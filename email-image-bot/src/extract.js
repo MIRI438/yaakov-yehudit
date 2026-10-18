@@ -772,6 +772,9 @@ export async function getMediaFromLink(link) {
   if (hostIn(new URL(link).hostname.toLowerCase(), NO_DOWNLOAD_SITES)) {
     throw new Error('הבוט לא מוריד סרטונים מיוטיוב: תנאי השימוש של יוטיוב אוסרים הורדה, והתוכן לרוב מוגן בזכויות יוצרים');
   }
+  // The API is at a fixed public address; the file address it returns is checked like any other.
+  const viaApi = await pixabayFile(link);
+  if (viaApi) return [await getMainMedia(viaApi)];
   await checkUrl(link, false);
   if (isChatShare(link)) {
     const all = await allMediaWithBrowser(link);
@@ -780,6 +783,30 @@ export async function getMediaFromLink(link) {
   }
   const one = await getMainMedia(directDownloadUrl(link));
   return [one];
+}
+
+/**
+ * Pixabay blocks automated browsers (Cloudflare), but has an official free API that gives the file itself.
+ * Needs PIXABAY_API_KEY (from https://pixabay.com/api/docs/ after signing in). Returns null when it does not apply.
+ */
+async function pixabayFile(link) {
+  const u = new URL(link);
+  if (!/(^|\.)pixabay\.com$/i.test(u.hostname)) return null;
+  const m = /^\/(?:[a-z]{2}\/)?(videos|photos|illustrations|vectors|gifs)\/(?:[^/]*-)?(\d+)\/?$/i.exec(u.pathname);
+  if (!m) return null;
+  const key = process.env.PIXABAY_API_KEY;
+  if (!key) throw new Error('פיקסביי חוסם הורדה אוטומטית מהדף. צריך להגדיר בשרת מפתח (PIXABAY_API_KEY) של פיקסביי');
+  const video = m[1].toLowerCase() === 'videos';
+  report('fetch', 'Pixabay API');
+  const api = `https://pixabay.com/api/${video ? 'videos/' : ''}?key=${encodeURIComponent(key)}&id=${m[2]}`;
+  const res = await fetch(api, { signal: AbortSignal.timeout(config.fetchTimeoutMs) });
+  if (!res.ok) throw new Error(`פיקסביי לא החזיר את הקובץ (${res.status})`);
+  const hit = (await res.json()).hits?.[0];
+  if (!hit) throw new Error('הקובץ לא נמצא בפיקסביי');
+  if (!video) return hit.fullHDURL || hit.largeImageURL || hit.webformatURL;
+  // The biggest version that fits in an email; a bigger one would only be compressed down anyway.
+  const sizes = ['large', 'medium', 'small', 'tiny'].map((k) => hit.videos?.[k]).filter((v) => v?.url);
+  return (sizes.find((v) => v.size && v.size <= config.maxFileBytes) || sizes[sizes.length - 1])?.url || null;
 }
 
 /** The main image / video behind a link (direct file, page meta tags, or the rendered page). */
