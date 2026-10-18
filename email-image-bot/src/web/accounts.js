@@ -17,7 +17,8 @@ export const PRICING = {
   packSize: Number(process.env.PACK_SIZE || 10),
   packPrice: Number(process.env.PACK_PRICE || 2), // shekels
 };
-const quotaOn = () => process.env.QUOTA !== 'off';
+// Off by default: everything is free. QUOTA=on turns on the daily limit and paid packs.
+const quotaOn = () => process.env.QUOTA === 'on';
 // Free downloads also follow the device, so switching phones on the same device does not add more:
 // the browser (cookie) gets freePerDay a day in total, and a device signature (survives clearing cookies)
 // can give free downloads to at most this many phone numbers a day.
@@ -198,7 +199,7 @@ export function whoIs(sessionToken, visitor) {
   const phone = sessionToken && d.sessions[sessionToken];
   const account = phone ? d.accounts[phone] : null;
   if (account) return { key: `p:${phone}`, account };
-  return { key: `v:${visitor}`, account: null, needsPhone: VERIFY !== 'off' };
+  return { key: `v:${visitor}`, account: null, needsPhone: quotaOn() && VERIFY !== 'off' };
 }
 
 /** The quota key for an email sender: the account it is linked to, or the address itself. */

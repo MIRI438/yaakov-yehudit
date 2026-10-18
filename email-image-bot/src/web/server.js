@@ -9,6 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findLinks } from '../extract.js';
 import { sendReply } from '../mailer.js';
+import { canEmail, validEmail } from './delivery.js';
 import {
   addCredits, checkEmailLink, checkVerification, publicAccount, quotaFor, signOut, startEmailLink, startVerification,
   unlinkEmail, VERIFY, whoIs,
@@ -208,6 +209,8 @@ async function route(req, res) {
       }
       const links = findLinks(String(body.text || ''), '', '').slice(0, MAX_LINKS_PER_REQUEST);
       if (!links.length) return send(res, 400, { error: 'לא מצאתי קישור. הדביקו כתובת שמתחילה ב-https://' });
+      const email = String(body.email || '').trim().toLowerCase();
+      if (!validEmail(email)) return send(res, 400, { error: 'email', message: 'לאיזה מייל לשלוח?' });
       if (who.needsPhone) return send(res, 401, { error: 'phone' });
       const quota = quotaFor(who.key, pendingOf(who.key), where);
       if (quota.on && quota.available < links.length) {
@@ -216,7 +219,10 @@ async function route(req, res) {
       if (!allowed(who.key, links.length)) {
         return send(res, 429, { error: 'הגעתם למגבלת השימוש לשעה. נסו שוב מעט מאוחר יותר.' });
       }
-      return send(res, 200, { jobs: links.map((l) => publicJob(createJob(l, visitor, who.key, where))) });
+      if (!canEmail(email, links.length)) {
+        return send(res, 429, { error: 'נשלחו יותר מדי קבצים למייל הזה בשעה האחרונה. נסו שוב מאוחר יותר.' });
+      }
+      return send(res, 200, { jobs: links.map((l) => publicJob(createJob(l, visitor, who.key, where, email))) });
     }
 
     if (method === 'GET' && parts[1] === 'history') return send(res, 200, { jobs: historyFor(visitor) });

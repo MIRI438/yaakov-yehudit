@@ -139,6 +139,19 @@ button { font: inherit; color: inherit; }
 .mini-form input:focus { border-color: var(--violet); }
 .mini-btn { padding: 0 14px; border-radius: 12px; border: 1px solid var(--stroke-2); background: var(--surface-2); color: var(--text); font: inherit; font-weight: 700; cursor: pointer; }
 
+/* ---------- email delivery: the page shows progress, the files go to the inbox ---------- */
+.recents, #open-history, .results, .job-actions { display: none !important; }
+.mail-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; padding: 10px 14px 4px; border-top: 1px solid var(--stroke); }
+.mail-row input { flex: 1; min-width: 0; background: none; border: 0; outline: none; color: var(--text); font: inherit; font-size: 17px; text-align: right; }
+.mail-row input:not(:placeholder-shown) { text-align: left; }
+.mail-row input::placeholder { color: var(--faint); }
+.mail-row.bad { animation: shake .4s; }
+.mail-row.bad input::placeholder { color: var(--pink); }
+.job-mail { margin-top: 14px; padding: 12px 16px; border-radius: 14px; font-weight: 600; background: var(--surface); border: 1px solid var(--stroke); color: var(--muted); }
+.job-mail.sent { color: var(--lime); border-color: rgba(182,255,92,.35); background: rgba(182,255,92,.06); }
+.job-mail.failed { color: var(--red); border-color: rgba(255,92,122,.35); }
+.job-mail b { direction: ltr; unicode-bidi: isolate; }
+
 .mail-way { text-decoration: none; color: var(--muted); }
 .mail-way b { color: var(--text); font-weight: 600; }
 .mail-way:hover b { color: var(--pink); }

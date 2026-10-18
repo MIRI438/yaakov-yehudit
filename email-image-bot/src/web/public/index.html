@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Linkra · התמונה שיצרת, כקובץ נקי</title>
-  <meta name="description" content="יצרתם תמונה ב-Gemini, ChatGPT או Leonardo? מדביקים קישור ומקבלים את הקובץ עצמו, אחרי סינון צניעות." />
+  <title>Linkra · התמונה שיצרת, כקובץ נקי במייל</title>
+  <meta name="description" content="יצרתם תמונה ב-Gemini, ChatGPT או Leonardo? מדביקים קישור, והקובץ מגיע למייל אחרי סינון צניעות. חינם." />
   <meta name="theme-color" content="#07060d" />
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -43,7 +43,7 @@
         <span class="line">יצרת תמונה?</span>
         <span class="line">קבלו אותה <em class="gradient-text">כקובץ נקי.</em></span>
       </h1>
-      <p class="sub">מדביקים קישור, ומקבלים את הקובץ עצמו אחרי סינון צניעות.</p>
+      <p class="sub">מדביקים קישור, והקובץ מגיע אליך למייל אחרי סינון צניעות.</p>
 
       <form class="composer" id="composer" autocomplete="off">
         <div class="composer-glow" aria-hidden="true"></div>
@@ -57,6 +57,10 @@
               <svg class="cta-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l-6 6 6 6"/></svg>
             </button>
           </div>
+          <label class="mail-row">
+            <span aria-hidden="true">📧</span>
+            <input id="email" type="email" placeholder="לאיזה מייל לשלוח?" dir="ltr" autocomplete="email" aria-label="המייל שלך" />
+          </label>
         </div>
         <div class="drop-overlay" aria-hidden="true">שחררו כאן</div>
       </form>
@@ -64,9 +68,9 @@
       <ol class="steps" aria-label="איך זה עובד">
         <li><span class="step-ico">✦</span>יוצרים</li>
         <li><span class="step-ico">🔗</span>מדביקים קישור</li>
-        <li><span class="step-ico">↓</span>מקבלים קובץ</li>
+        <li><span class="step-ico">📧</span>מקבלים במייל</li>
       </ol>
-      <p class="trust"><span>✓ סינון צניעות</span><span>✓ איכות מקורית</span><span id="trust-free">✓ 8 חינם ביום</span></p>
+      <p class="trust"><span>✓ סינון צניעות</span><span>✓ איכות מקורית</span><span id="trust-free">✓ חינם</span></p>
 
       <div class="recents" id="recents" hidden>
         <div class="recents-track" id="recents-track"></div>
@@ -183,6 +187,7 @@
       </div>
       <ol class="timeline"></ol>
       <div class="job-msg" hidden></div>
+      <div class="job-mail" hidden></div>
       <div class="results"></div>
       <div class="job-actions" hidden>
         <a class="pill-btn zip-btn" download>⬇ הכל (ZIP)</a>

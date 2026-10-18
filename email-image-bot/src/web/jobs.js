@@ -124,7 +124,8 @@ const newId = () => randomBytes(9).toString('base64url');
 /** The public view of a job (what the browser sees). */
 export function publicJob(job) {
   if (!job) return null;
-  const { visitor, owner, where, ...rest } = job;
+  const { visitor, owner, where, email, ...rest } = job;
+  if (email) rest.mailTo = email.replace(/^(.{2})[^@]*/, '$1•••');
   return rest;
 }
 
@@ -136,6 +137,10 @@ export const onJobUpdate = (id, fn) => {
 
 /** Called once for every job that ended with files. */
 export const onJobDone = (fn) => events.on('finished', fn);
+/** Called once for every job when it ends (with or without files). */
+export const onJobEnded = (fn) => events.on('ended', fn);
+/** Saves a change made outside this module and tells the open pages. */
+export const touchJob = (job) => update(job);
 
 function update(job) {
   save();
@@ -143,12 +148,14 @@ function update(job) {
 }
 
 /** owner: who pays for it (quota key); where: the browser and device it came from. */
-export function createJob(url, visitor, owner = '', where = {}) {
+export function createJob(url, visitor, owner = '', where = {}, email = '') {
   const job = {
     id: newId(),
     visitor,
     owner,
     where,
+    email, // the files are sent there (the website only shows the progress)
+    mail: email ? 'pending' : undefined,
     url,
     site: detectSite(url),
     status: 'queued',
@@ -243,6 +250,7 @@ async function runJob(job) {
   job.finishedAt = Date.now();
   job.durationMs = job.finishedAt - started;
   if (job.status === 'done') events.emit('finished', job);
+  events.emit('ended', job);
   step(job, job.status === 'done' ? 'done' : 'failed');
   recordStats({ site: job.site.key, files: job.files, blocked: job.blocked });
   log(`website: ${job.status} ${job.url} (${job.files.length} files, ${job.blocked} blocked, ${job.durationMs}ms)`);

@@ -411,6 +411,21 @@ form.addEventListener('drop', (e) => {
   if (text) { input.value = text; refreshComposer(); form.requestSubmit(); }
 });
 
+// The files are sent by email; the address is remembered on this device.
+const emailInput = $('#email');
+try { emailInput.value = localStorage.getItem('linkra-email') || ''; } catch { /* private mode */ }
+emailInput.addEventListener('change', () => {
+  try { localStorage.setItem('linkra-email', emailInput.value.trim()); } catch { /* private mode */ }
+});
+emailInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); form.requestSubmit(); } });
+const validEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v);
+function askEmail() {
+  const row = $('.mail-row');
+  row.classList.remove('bad'); void row.offsetWidth; row.classList.add('bad');
+  emailInput.focus();
+  toast('לאיזה מייל לשלוח?', 'err');
+}
+
 let askedNotify = false;
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -420,6 +435,9 @@ form.addEventListener('submit', async (e) => {
     toast('צריך קישור שמתחיל ב-https://', 'err');
     return;
   }
+  const email = emailInput.value.trim();
+  if (!validEmail(email)) return askEmail();
+  try { localStorage.setItem('linkra-email', email); } catch { /* private mode */ }
   if (!askedNotify && 'Notification' in window && Notification.permission === 'default') {
     askedNotify = true;
     Notification.requestPermission().catch(() => {});
@@ -427,8 +445,9 @@ form.addEventListener('submit', async (e) => {
   const btn = $('#submit-btn');
   btn.disabled = true;
   try {
-    const res = await fetch('/api/jobs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) });
+    const res = await fetch('/api/jobs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text, email }) });
     const body = await res.json();
+    if (body.error === 'email') return askEmail();
     if (res.status === 401) {
       pendingText = text;
       openPhone();
@@ -465,7 +484,9 @@ const STEPS = [
   { key: 'video', label: 'וידאו', optional: true },
   { key: 'moderation', label: 'צניעות', optional: true },
   { key: 'done', label: 'מוכן' },
+  { key: 'mail', label: 'במייל' },
 ];
+const mailBusy = (job) => job.mail === 'pending' || job.mail === 'sending';
 const openJobs = new Map();
 
 function showJob(job, { live = false } = {}) {
@@ -500,17 +521,20 @@ function follow(id) {
   source.onmessage = (e) => {
     const job = JSON.parse(e.data);
     const wasDone = entry.job.status === 'done';
+    const wasSent = entry.job.mail === 'sent';
     renderJob(entry, job);
-    if (job.status !== 'done' && job.status !== 'failed') return;
+    if ((job.status !== 'done' && job.status !== 'failed') || mailBusy(job)) return;
     source.close();
     clearInterval(entry.timer);
     tickTime(entry);
-    if (job.status === 'done' && !wasDone) {
+    if (job.mail === 'sent' && job.status === 'done' && !wasSent) {
       const r = entry.el.getBoundingClientRect();
       confetti(r.left + r.width / 2, Math.max(r.top + 60, 80));
-      toast(job.files.length === 1 ? 'מוכן ✦' : `${job.files.length} קבצים מוכנים ✦`, 'ok');
+      toast('נשלח למייל ✦', 'ok');
       notify(job);
-    } else if (job.status === 'failed') toast('לא הצלחנו לחלץ', 'err');
+    } else if (job.status === 'done' && !wasDone && !job.mail) toast('מוכן ✦', 'ok');
+    else if (job.status === 'failed') toast('לא הצלחנו לחלץ', 'err');
+    else if (job.mail === 'failed') toast('השליחה למייל נכשלה', 'err');
     loadHistory();
     loadStats();
     loadMe();
@@ -520,7 +544,7 @@ function follow(id) {
 function notify(job) {
   if (!document.hidden || !('Notification' in window) || Notification.permission !== 'granted') return;
   try {
-    new Notification('Linkra: מוכן ✦', { body: `${job.files.length} קבצים מ-${job.site?.name || 'הקישור'}`, icon: '/assets/favicon.svg' });
+    new Notification('Linkra: נשלח למייל ✦', { body: `${job.files.length} קבצים מ-${job.site?.name || 'הקישור'}`, icon: '/assets/favicon.svg' });
   } catch {
     /* some browsers only allow notifications from a service worker */
   }
@@ -551,7 +575,12 @@ function renderJob(entry, job) {
     const hit = reached.get(key);
     li.className = '';
     $('.step-label', li).textContent = s.label;
-    if (key === 'done' && job.status === 'failed') {
+    if (key === 'mail') {
+      if (job.mail === 'sent') li.classList.add('done');
+      else if (job.mail === 'failed') li.classList.add('failed');
+      else if (finished && mailBusy(job)) li.classList.add('active');
+      else if (!job.mail && finished) li.classList.add('skipped');
+    } else if (key === 'done' && job.status === 'failed') {
       li.classList.add('failed');
       $('.step-label', li).textContent = 'נכשל';
     } else if (hit) li.classList.add(!finished && key === lastKey ? 'active' : 'done');
@@ -567,6 +596,17 @@ function renderJob(entry, job) {
     Object.assign(msg, { hidden: false, className: 'job-msg info', textContent: 'הקבצים נמחקו (עברו 7 ימים). אפשר לשלוח שוב.' });
   } else if (job.blocked && finished) {
     Object.assign(msg, { hidden: false, className: 'job-msg info', textContent: `${job.blocked} לא עברו סינון צניעות` });
+  }
+
+  const mailLine = $('.job-mail', el);
+  mailLine.hidden = !job.mail;
+  if (job.mail) {
+    mailLine.className = `job-mail ${job.mail}`;
+    const [before, after] = job.mail === 'sent' ? ['✓ נשלח ל-', ''] : job.mail === 'failed' ? ['השליחה ל-', ' נכשלה. נסו שוב.'] : ['📧 נשלח ל-', ' כשיהיה מוכן'];
+    mailLine.textContent = before;
+    const b = document.createElement('b');
+    b.textContent = job.mailTo || '';
+    mailLine.append(b, after);
   }
 
   const results = $('.results', el);
