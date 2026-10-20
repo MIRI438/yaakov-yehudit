@@ -7,6 +7,7 @@ import { config } from './config.js';
 import { findLinks, getMediaFromLink, stripQuotedText } from './extract.js';
 import { sendReply, verifySending } from './mailer.js';
 import { checkModesty, moderationDescription, warmUpModeration } from './moderation.js';
+import { packImagesAsPdf } from './pdf.js';
 import {
   activationOf, checkVerification, consume, linkEmail, maskPhone, normalizePhone, PRICING, quotaFor, setActivation, signOut,
   startVerification, VERIFY, whoIsEmail,
@@ -133,6 +134,14 @@ async function handleMessage(source) {
     if (kept.length) consume(who.key);
     recordStats({ site: detectSite(links[i]).key, files: kept, blocked: blocked - blockedBefore });
   }
+  // All the images of this email in one PDF (in the order of the links); videos stay separate.
+  const sent = results.flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
+  const { pdf } = await packImagesAsPdf(sent, config.maxTotalBytes);
+  if (pdf) {
+    attachments.push({ filename: pdf.filename, content: pdf.content, contentType: pdf.contentType });
+    totalBytes += pdf.content.length;
+    for (const r of results) if (r.status === 'fulfilled') r.value = r.value.filter((f) => !pdf.has(f));
+  }
   results.forEach((r, i) => {
     if (r.status === 'rejected') {
       failures.push(`${links[i]}\n   ← ${r.reason?.message || r.reason}`);
@@ -159,8 +168,10 @@ async function handleMessage(source) {
   });
 
   let text = 'שלום,\n\n';
-  if (attachments.length === 1) text += 'מצורף הקובץ מהקישור ששלחת.\n';
-  if (attachments.length > 1) text += `מצורפים ${attachments.length} קבצים מהקישורים ששלחת.\n`;
+  if (pdf) text += `מצורף קובץ PDF עם ${pdf.pages === 1 ? 'התמונה' : `${pdf.pages} התמונות`} מהקישור ששלחת${pdf.pages > 1 ? ', תמונה בכל עמוד' : ''}.\n`;
+  const others = attachments.length - (pdf ? 1 : 0);
+  if (others === 1) text += pdf ? 'ועוד קובץ מצורף.\n' : 'מצורף הקובץ מהקישור ששלחת.\n';
+  if (others > 1) text += pdf ? `ועוד ${others} קבצים מצורפים.\n` : `מצורפים ${others} קבצים מהקישורים ששלחת.\n`;
   if (downloadLinks.length) {
     text += `\nקבצים שגדולים מדי לצירוף למייל, אפשר להוריד אותם כאן:\n${downloadLinks.map((u) => `• ${u}`).join('\n')}\n`;
   }

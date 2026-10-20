@@ -4,6 +4,7 @@
 import { readFile } from 'node:fs/promises';
 import { config } from '../config.js';
 import { sendReply } from '../mailer.js';
+import { packImagesAsPdf } from '../pdf.js';
 import { filePath, onJobEnded, touchJob } from './jobs.js';
 
 const log = (...args) => console.log(new Date().toISOString(), ...args);
@@ -31,19 +32,26 @@ async function deliver(job) {
   const attachments = [];
   const links = [];
   let total = 0;
+  const files = [];
   for (const f of job.files) {
     const found = await filePath(job, f.id);
-    if (!found) continue;
-    if (total + f.size <= config.maxTotalBytes) {
-      attachments.push({ filename: f.name, content: await readFile(found.path), contentType: f.type });
-      total += f.size;
-    } else if (site) links.push(`${site}/files/${job.id}/${f.id}?download=1`);
+    if (found) files.push({ ...f, filename: f.name, contentType: f.type, content: await readFile(found.path) });
+  }
+  // The images as one PDF; videos as they are.
+  const { files: toSend, pdf } = await packImagesAsPdf(files, config.maxTotalBytes);
+  for (const f of toSend) {
+    if (total + f.content.length <= config.maxTotalBytes) {
+      attachments.push({ filename: f.filename, content: f.content, contentType: f.contentType });
+      total += f.content.length;
+    } else if (site && f.id) links.push(`${site}/files/${job.id}/${f.id}?download=1`);
   }
 
   let text = 'שלום,\n\n';
   if (job.status !== 'done') text += `לא הצלחתי להוריד מהקישור:\n${job.url}\n${job.error ? `← ${job.error}\n` : ''}`;
   else {
-    text += attachments.length === 1 ? 'מצורף הקובץ מהקישור:\n' : attachments.length ? `מצורפים ${attachments.length} קבצים מהקישור:\n` : '';
+    if (pdf) text += `מצורף קובץ PDF עם ${pdf.pages === 1 ? 'התמונה' : `${pdf.pages} התמונות`}${pdf.pages > 1 ? ' (תמונה בכל עמוד)' : ''} מהקישור:\n`;
+    else text += attachments.length === 1 ? 'מצורף הקובץ מהקישור:\n' : attachments.length ? `מצורפים ${attachments.length} קבצים מהקישור:\n` : '';
+    if (pdf && attachments.length > 1) text += `ועוד ${attachments.length - 1 === 1 ? 'קובץ' : `${attachments.length - 1} קבצים`} מצורפים.\n`;
     text += `${job.url}\n`;
     if (links.length) text += `\nקבצים גדולים מדי למייל, אפשר להוריד אותם כאן (7 ימים):\n${links.map((l) => `• ${l}`).join('\n')}\n`;
     if (job.blocked) text += `\n${job.blocked === 1 ? 'קובץ אחד לא נשלח' : `${job.blocked} קבצים לא נשלחו`} כי לא עבר${job.blocked === 1 ? '' : 'ו'} את סינון הצניעות.\n`;
