@@ -25,9 +25,9 @@ export async function hasFfmpeg() {
   return available;
 }
 
-export function run(cmd, args, options = {}) {
+function run(cmd, args) {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { timeout: FFMPEG_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024, ...options }, (err, stdout, stderr) =>
+    execFile(cmd, args, { timeout: FFMPEG_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) =>
       err ? reject(new Error(String(stderr || err.message).slice(-500))) : resolve(stdout),
     );
   });
