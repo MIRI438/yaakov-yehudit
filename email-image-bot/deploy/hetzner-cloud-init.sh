@@ -1,5 +1,5 @@
 #!/bin/bash
-# Hetzner Cloud: Create Server → "Cloud config"; Kamatera: Advanced Configuration → "Install Script"
+# Hetzner Cloud: Create Server > "Cloud config"; Kamatera: Advanced Configuration > "Install Script"
 # (and turn on "Keep Server On Failure"). Paste this whole file after filling in the part below.
 # Works on any new Ubuntu 22.04 / 24.04 server.
 # Runs once when the server is created and sets everything up:
@@ -10,7 +10,7 @@
 # Never commit this file with real values in it (the repository is public).
 
 # ===================== fill in =====================
-# From Railway: the service → Variables → "Raw Editor" → copy everything and paste between the two EOF lines.
+# From Railway: the service > Variables > "Raw Editor" > copy everything and paste between the two EOF lines.
 # (Sending settings, PORT, PUBLIC_URL and DATA_DIR from there are ignored; this server sets its own.)
 # LOGS_KEY: a long secret word of your choice; the log is then at https://<site>/logs?key=<that word>.
 cat > /root/bot.env.in <<'EOF'
