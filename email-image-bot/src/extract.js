@@ -375,6 +375,7 @@ async function renderPage(chromium, pageUrl, fn, scroll) {
     });
     // Every image / video the page downloads, with its size: the generated one is usually the biggest.
     const loaded = [];
+    let captured = 0;
     page.on('response', async (response) => {
       const headers = response.headers();
       const type = (headers['content-type'] || '').toLowerCase();
@@ -383,10 +384,19 @@ async function renderPage(chromium, pageUrl, fn, scroll) {
       // Pieces of a stream are not whole videos.
       if (/mp2t|iso\.segment/.test(type) || /\.(ts|m4s)($|\?)/i.test(response.url())) return;
       const total = Number(/\/(\d+)$/.exec(headers['content-range'] || '')?.[1] || headers['content-length'] || 0);
-      const size = total || (await response.body().then((b) => b.length).catch(() => 0));
-      loaded.push({ url: response.url(), size, video: type.startsWith('video/') });
+      // Images are kept as the page received them: some sites (ChatGPT) refuse a second download (403),
+      // and a cross-origin picture cannot be exported from the page either.
+      let body = null;
+      if (type.startsWith('image/') && response.status() === 200 && captured < MAX_CAPTURE_BYTES) {
+        body = await response.body().catch(() => null);
+        if (body && body.length >= 20 * 1024) captured += body.length;
+        else body = null;
+      }
+      const size = total || body?.length || (await response.body().then((b) => b.length).catch(() => 0));
+      loaded.push({ url: response.url(), size, video: type.startsWith('video/'), body, type });
     });
-    await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: config.fetchTimeoutMs });
+    // Heavy pages (ChatGPT) can take longer than a plain download to open, especially on a busy server.
+    await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: Math.max(config.fetchTimeoutMs, 45000) });
     await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
     if (LOGIN_PAGE.test(new URL(page.url()).pathname) && !LOGIN_PAGE.test(new URL(pageUrl).pathname)) {
       throw new Error(PRIVATE_MESSAGE);
@@ -516,6 +526,8 @@ async function mainMediaWithBrowser(pageUrl, ids, { videoOnly, tried }) {
       tried.add(url);
       const media =
         (await downloadMedia(url).catch(() => null)) ||
+        // The copy the page itself received (sites that refuse a second download).
+        (await fromCaptured(loaded, url).catch(() => null)) ||
         // Files some sites (e.g. Google) only serve to the browser session that opened the page.
         (await downloadWithBrowser(page, url).catch(() => null));
       if (media && (!videoOnly || media.contentType.startsWith('video/'))) return media;
@@ -573,6 +585,7 @@ async function allMediaWithBrowser(pageUrl) {
       let media = null;
       if (parseHttpUrl(item.src)) {
         media =
+          (await attempt(() => fromCaptured(loaded, fullSizeUrl(item.src)), item.src)) ||
           (await attempt(() => downloadMedia(fullSizeUrl(item.src)), item.src)) ||
           (await attempt(() => downloadMedia(item.src), item.src)) ||
           // Some chat sites only serve the file to the browser session that opened the chat.
@@ -595,6 +608,16 @@ async function allMediaWithBrowser(pageUrl) {
     }
     return results;
   }, { scroll: true });
+}
+
+const MAX_CAPTURE_BYTES = 60 * 1024 * 1024;
+
+/** The image exactly as the page downloaded it (see renderPage), or null. */
+async function fromCaptured(loaded, url) {
+  const hit = loaded.find((i) => i.body && i.url === url);
+  if (!hit) return null;
+  const type = hit.type.split(';')[0].trim();
+  return fitInEmail({ contentType: type, filename: filenameFor(url, type), sourceUrl: url }, hit.body);
 }
 
 // Google image URLs carry a size suffix (…=w512-h512); "=s0" asks for the original size.
