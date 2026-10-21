@@ -1,6 +1,7 @@
 // Email bot: anyone who emails a link (Leonardo, Freepik, a shared ChatGPT / Gemini chat, any page...)
 // gets the images / videos behind it back as attachments.
 
+import './logbuffer.js'; // first, so it sees every log line
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import { config } from './config.js';

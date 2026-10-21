@@ -1,7 +1,7 @@
 // The website: paste links, watch them being processed live, preview / download the files, and browse
 // your history. Same engine as the email bot (browser, video handling, modesty filter).
 
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import http from 'node:http';
@@ -9,6 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findLinks } from '../extract.js';
 import { sendReply } from '../mailer.js';
+import { recentLogs } from '../logbuffer.js';
 import { stashedPath } from '../stash.js';
 import { canEmail, validEmail } from './delivery.js';
 import {
@@ -135,6 +136,15 @@ async function route(req, res) {
   if (method === 'GET' && parts[0] === 'assets') return serveStatic(res, parts.slice(1).join('/'));
   if (method === 'GET' && url.pathname === '/favicon.ico') return serveStatic(res, 'favicon.svg');
   if (url.pathname === '/health') return send(res, 200, { ok: true });
+  // The bot's recent log, for hosts without a log viewer. Needs LOGS_KEY (a long secret word) in the settings.
+  if (method === 'GET' && url.pathname === '/logs') {
+    const key = process.env.LOGS_KEY || '';
+    const given = url.searchParams.get('key') || '';
+    if (key.length < 8 || given.length !== key.length || !timingSafeEqual(Buffer.from(given), Buffer.from(key))) {
+      return send(res, 404, 'not found');
+    }
+    return send(res, 200, recentLogs(), { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+  }
 
   if (parts[0] === 'api') {
     const visitor = visitorOf(req, res);
