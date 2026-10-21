@@ -537,6 +537,7 @@ function follow(id) {
     } else if (job.status === 'done' && !wasDone && !job.mail) toast('מוכן ✦', 'ok');
     else if (job.status === 'failed') toast('לא הצלחנו לחלץ', 'err');
     else if (job.mail === 'failed') toast('השליחה למייל נכשלה', 'err');
+    else if (job.mail === 'waiting') toast('המייל יישלח בהקדם ⏳');
     loadHistory();
     loadStats();
     loadMe();
@@ -604,7 +605,10 @@ function renderJob(entry, job) {
   mailLine.hidden = !job.mail;
   if (job.mail) {
     mailLine.className = `job-mail ${job.mail}`;
-    const [before, after] = job.mail === 'sent' ? ['✓ נשלח ל-', ''] : job.mail === 'failed' ? ['השליחה ל-', ' נכשלה. נסו שוב.'] : ['📧 נשלח ל-', ' כשיהיה מוכן'];
+    const [before, after] = job.mail === 'sent' ? ['✓ נשלח ל-', '']
+      : job.mail === 'failed' ? ['השליחה ל-', ' נכשלה. נסו שוב.']
+      : job.mail === 'waiting' ? ['⏳ הרבה מיילים היום. נשלח ל-', ' בהקדם, אפשר לסגור את הדף']
+      : ['📧 נשלח ל-', ' כשיהיה מוכן'];
     mailLine.textContent = before;
     const b = document.createElement('b');
     b.textContent = job.mailTo || '';

@@ -11,6 +11,7 @@ const log = (...args) => console.log(new Date().toISOString(), ...args);
 // One recipient cannot be flooded by someone typing their address on the site.
 const MAX_PER_RECIPIENT_PER_HOUR = Number(process.env.WEB_MAX_EMAILS_PER_ADDRESS_PER_HOUR || 30);
 const recent = new Map(); // email -> timestamps
+const RETRY_MS = Number(process.env.SEND_QUOTA_RETRY_MINUTES || 30) * 60 * 1000;
 
 export function canEmail(email, count = 1) {
   const hourAgo = Date.now() - 60 * 60 * 1000;
@@ -60,8 +61,15 @@ async function deliver(job) {
     job.mail = 'sent';
     log(`website: emailed ${attachments.length} file(s) for ${job.url}`);
   } catch (err) {
-    job.mail = 'failed';
-    log(`website: email for ${job.url} failed: ${err.message}`);
+    if (/too many times|limit exceeded|quota/i.test(err.message) && (job.mailTries = (job.mailTries || 0) + 1) < 6) {
+      // Gmail's daily sending limit: try again later instead of giving up.
+      job.mail = 'waiting';
+      setTimeout(() => deliver(job).catch(() => {}), RETRY_MS).unref();
+      log(`website: daily sending limit, email for ${job.url} will be retried`);
+    } else {
+      job.mail = 'failed';
+      log(`website: email for ${job.url} failed: ${err.message}`);
+    }
   }
   touchJob(job);
 }

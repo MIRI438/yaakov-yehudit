@@ -270,7 +270,20 @@ let client;
 let checking = false;
 let checkAgain = false;
 
+// Gmail allows a limited number of emails a day (about 100 through Apps Script). When that runs out, emails
+// stay unread in the inbox and are answered once sending works again, instead of being lost.
+const QUOTA_ERROR = /too many times|limit exceeded|quota/i;
+const QUOTA_RETRY_MS = Number(process.env.SEND_QUOTA_RETRY_MINUTES || 30) * 60 * 1000;
+let sendingPausedUntil = 0;
+
+async function putBack(uid, err) {
+  sendingPausedUntil = Date.now() + QUOTA_RETRY_MS;
+  log(`daily sending limit reached (${err.message}); message ${uid} stays unread, next try at ${new Date(sendingPausedUntil).toISOString()}`);
+  await client.messageFlagsRemove({ uid: String(uid) }, ['\\Seen'], { uid: true }).catch((e) => log('could not mark unread:', e.message));
+}
+
 async function checkInbox() {
+  if (Date.now() < sendingPausedUntil) return; // waiting for Gmail's daily limit to reset
   if (checking) {
     checkAgain = true;
     return;
@@ -284,7 +297,11 @@ async function checkInbox() {
         // Mark as read first so a crash never makes us answer the same email twice.
         await client.messageFlagsAdd({ uid: String(uid) }, ['\\Seen'], { uid: true });
         const msg = await client.fetchOne(String(uid), { source: true }, { uid: true });
-        handleMessage(msg.source).catch((err) => log(`error handling message ${uid}: ${err.message}`));
+        handleMessage(msg.source).catch((err) => {
+          if (QUOTA_ERROR.test(err.message)) return putBack(uid, err);
+          log(`error handling message ${uid}: ${err.message}`);
+        });
+        if (Date.now() < sendingPausedUntil) break;
       }
     } while (checkAgain);
   } catch (err) {
