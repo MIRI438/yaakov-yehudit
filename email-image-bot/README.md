@@ -138,6 +138,26 @@ Railway חוסם בתוכניות Free/Trial/Hobby את הפורטים לשלי�
 והבוט מנסה שוב כל 30 דקות (`SEND_QUOTA_RETRY_MINUTES`) עד שהשליחה נפתחת, כך ששום מייל לא הולך לאיבוד.
 מיילים מהאתר מחכים באותו אופן. חשבון Google Workspace (בתשלום) מאפשר כ-1,500 ביום.
 
+### שליחה דרך Vercel (כ-500 מיילים ביום במקום 100)
+
+Railway חוסם SMTP, אבל Vercel לא. בתיקייה `deploy/vercel-mail-relay` יש שירות קטן ששולח את התשובות מהג'ימייל של הבוט
+ב-SMTP, כך שהמגבלה היא של ג'ימייל הרגיל (כ-500 ביום) ולא של Apps Script (כ-100).
+
+1. ב-<https://vercel.com>: **Add New → Project** ← בוחרים את המאגר `yaakov-yehudit` ← **Import**.
+2. **Root Directory**: `email-image-bot/deploy/vercel-mail-relay`.
+3. **Environment Variables**:
+   - `GMAIL_USER` = כתובת הג'ימייל של הבוט
+   - `GMAIL_APP_PASSWORD` = סיסמת האפליקציה (אותה סיסמה שב-Railway)
+   - `RELAY_SECRET` = מילה סודית ארוכה חדשה
+4. **Deploy**. אם הענף שבו נמצא הקוד אינו `main`, משנים ב-Settings של הפרויקט את ענף ה-Production לענף הזה ומפרסמים שוב.
+5. ב-Railway, ב-**Variables**, מוסיפים:
+   - `MAIL_RELAY_URL` = `https://<שם-הפרויקט>.vercel.app/api/send`
+   - `MAIL_RELAY_SECRET` = המילה הסודית מסעיף 3
+   - `PUBLIC_URL` = הכתובת של האתר ב-Railway. Vercel מקבל עד 4.5MB לבקשה, ולכן קבצים גדולים יותר עוברים כקישור
+     זמני (שעתיים, אקראי) שהשירות מוריד ומצרף למייל.
+
+כש-`MAIL_RELAY_URL` מוגדר, הבוט שולח דרכו ולא דרך Apps Script. ביומן יופיע `replies will be sent via mail relay`.
+
 ### שרת חינמי ב-Oracle Cloud (Always Free)
 
 הקובץ `deploy/oracle-cloud-init.sh` מתקין ומפעיל הכול לבד כשהשרת נוצר, בלי צורך להתחבר אליו.

@@ -9,6 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findLinks } from '../extract.js';
 import { sendReply } from '../mailer.js';
+import { stashedPath } from '../stash.js';
 import { canEmail, validEmail } from './delivery.js';
 import {
   addCredits, checkEmailLink, checkVerification, publicAccount, quotaFor, signOut, startEmailLink, startVerification,
@@ -268,6 +269,15 @@ async function route(req, res) {
       return send(res, 404, { error: 'לא נמצא' });
     }
     return send(res, 404, { error: 'לא נמצא' });
+  }
+
+  // Attachments the mail relay downloads (short-lived, random links): /mail-files/<token>/<name>
+  if (method === 'GET' && parts[0] === 'mail-files' && parts[1] && parts[2]) {
+    const p = await stashedPath(parts[1], parts[2]);
+    if (!p) return send(res, 404, 'not found');
+    const { size } = await stat(p);
+    res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': size, 'cache-control': 'no-store' });
+    return createReadStream(p).pipe(res);
   }
 
   // Files: /files/<job>/<file>[/poster]  (?download=1 to save instead of view)
