@@ -1,5 +1,7 @@
 #!/bin/bash
-# Hetzner Cloud: Create Server → "Cloud config" → paste this whole file (after filling in the part below).
+# Hetzner Cloud: Create Server → "Cloud config"; Kamatera: Advanced Configuration → "Install Script"
+# (and turn on "Keep Server On Failure"). Paste this whole file after filling in the part below.
+# Works on any new Ubuntu 22.04 / 24.04 server.
 # Runs once when the server is created and sets everything up:
 #   - the bot and the website, restarting by themselves after a crash or a reboot;
 #   - the website at https://<ip-with-dashes>.sslip.io (a free address with a real certificate);
@@ -26,8 +28,17 @@ REPO=https://github.com/MIRI438/yaakov-yehudit.git
 BRANCH=claude/image-link-server-cvrrt5
 
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -y
-apt-get install -y git curl ufw
+# A new server often runs its own updates in the first minutes: wait for them instead of failing.
+wait_apt() {
+  for _ in $(seq 120); do
+    fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/lib/dpkg/lock >/dev/null 2>&1 || return 0
+    sleep 5
+  done
+}
+wait_apt
+apt-get -o DPkg::Lock::Timeout=600 update -y
+apt-get -o DPkg::Lock::Timeout=600 install -y git curl ufw psmisc
+wait_apt
 curl -fsSL https://get.docker.com | sh
 
 # A little swap, so the browser never runs the server out of memory.
