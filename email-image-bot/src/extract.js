@@ -36,6 +36,14 @@ const contentTypeOf = (res) => (res.headers.get('content-type') || '').split(';'
 // A link that lands on a login page means the image/video is private.
 const LOGIN_PAGE = /\/(login|log-in|signin|sign-in|signup|sign-up|auth)\b/i;
 const PRIVATE_MESSAGE = 'הקישור מוביל לדף התחברות: כנראה שהתמונה/הסרטון פרטיים. שלחו קישור שיתוף ציבורי';
+const GONE_HOME_MESSAGE = 'הקישור מוביל לדף הבית של האתר: התמונה/הסרטון כנראה נמחקו או פרטיים. שלחו קישור שיתוף ציבורי';
+
+/** The site sent a deep link (/app/creation/abc) to its home page: the item is gone or private. */
+function wentHome(original, final) {
+  const deep = new URL(original).pathname.split('/').filter(Boolean).length >= 2;
+  const home = /^\/?([a-z]{2}(-[a-z]{2})?\/?)?$/i.test(new URL(final).pathname); // "/", "/he", "/en-us/"
+  return deep && home;
+}
 
 function parseHttpUrl(url) {
   try {
@@ -383,6 +391,8 @@ async function renderPage(chromium, pageUrl, fn, scroll) {
     if (LOGIN_PAGE.test(new URL(page.url()).pathname) && !LOGIN_PAGE.test(new URL(pageUrl).pathname)) {
       throw new Error(PRIVATE_MESSAGE);
     }
+    // Otherwise the home page's picture would be sent as if it were the linked one.
+    if (wentHome(pageUrl, page.url())) throw new Error(GONE_HOME_MESSAGE);
     // Google's cookie-consent screen (shown to visitors without cookies): accept and continue.
     if (/^consent\./.test(new URL(page.url()).hostname)) {
       const button = page.locator('button, input[type=submit]').filter({
@@ -831,6 +841,10 @@ async function getMainMedia(link) {
   if (LOGIN_PAGE.test(new URL(finalUrl).pathname) && !LOGIN_PAGE.test(new URL(link).pathname)) {
     res.body?.cancel().catch(() => {});
     throw new Error(PRIVATE_MESSAGE);
+  }
+  if (wentHome(link, finalUrl)) {
+    res.body?.cancel().catch(() => {});
+    throw new Error(GONE_HOME_MESSAGE);
   }
 
   const ids = linkIds(link);

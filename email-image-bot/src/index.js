@@ -41,6 +41,12 @@ function shouldIgnore(mail, sender) {
 
 // ---- handling a single email ----
 
+/** sendReply, with sending errors marked (so a network failure while sending can be retried). */
+const send = (msg) => sendReply(msg).catch((err) => {
+  err.whileSending = true;
+  throw err;
+});
+
 async function handleMessage(source) {
   const mail = await simpleParser(source);
   const replyTo = mail.replyTo?.value?.[0]?.address || mail.from?.value?.[0]?.address;
@@ -62,7 +68,7 @@ async function handleMessage(source) {
     const fresh = `${incomingSubject}\n${stripQuotedText(mail.text || '')}`.replace(/https?:\/\/\S+/g, ' ');
     const answer = await activationStep(sender, fresh);
     if (answer && (answer.done ? !links.length : true)) {
-      await sendReply(plainReply(mail, replyTo, answer.text));
+      await send(plainReply(mail, replyTo, answer.text));
       log(`activation for ${sender}: ${answer.log}`);
       return;
     }
@@ -91,10 +97,10 @@ async function handleMessage(source) {
     if (!who.account && VERIFY !== 'off') {
       // The free trial of an email address is over: from now on it needs a phone (one per person).
       setActivation(sender, { asked: true });
-      await sendReply(plainReply(mail, replyTo, ACTIVATION_TEXT));
+      await send(plainReply(mail, replyTo, ACTIVATION_TEXT));
       return;
     }
-    await sendReply(plainReply(mail, replyTo, quotaText(overQuota, who)));
+    await send(plainReply(mail, replyTo, quotaText(overQuota, who)));
     return;
   }
 
@@ -108,6 +114,7 @@ async function handleMessage(source) {
   const results = await Promise.allSettled(links.map((link) => getMediaFromLink(link)));
   // Modesty filter: nothing is sent before it is checked.
   let blocked = 0;
+  let tooBig = 0; // too big to download and check (not a modesty problem)
   for (const [i, r] of results.entries()) {
     if (r.status !== 'fulfilled') {
       recordStats({ site: detectSite(links[i]).key });
@@ -118,7 +125,7 @@ async function handleMessage(source) {
     for (const file of r.value) {
       if (config.moderation !== 'off' && (file.tooLarge || !file.content)) {
         // Too big to download, so it cannot be checked: not sent.
-        blocked++;
+        tooBig++;
         log(`not sent (too large to check): ${file.sourceUrl}`);
         continue;
       }
@@ -167,7 +174,10 @@ async function handleMessage(source) {
   if (blocked) {
     text += `\n${blocked === 1 ? 'קובץ אחד לא נשלח' : `${blocked} קבצים לא נשלחו`} כי לא עבר${blocked === 1 ? '' : 'ו'} את סינון הצניעות.\n`;
   }
-  if (!attachments.length && !downloadLinks.length && !blocked) {
+  if (tooBig) {
+    text += `\n${tooBig === 1 ? 'קובץ אחד גדול מדי' : `${tooBig} קבצים גדולים מדי`} לשליחה, ולכן לא נשלח${tooBig === 1 ? '' : 'ו'}.\n`;
+  }
+  if (!attachments.length && !downloadLinks.length && !blocked && !tooBig) {
     text += 'לא הצלחתי להוריד תמונה או סרטון מהקישורים ששלחת.\n';
   }
   if (overQuota) text += `\n${quotaText(overQuota, who)}\n`;
@@ -187,12 +197,12 @@ async function handleMessage(source) {
   const megabytes = (reply.attachments.reduce((n, a) => n + a.content.length, 0) / 1024 / 1024).toFixed(1);
   const started = Date.now();
   try {
-    await sendReply(reply);
+    await send(reply);
   } catch (err) {
     log(`sending to ${sender} failed after ${((Date.now() - started) / 1000).toFixed(0)}s (${megabytes}MB): ${err.message}`);
     if (!attachments.length || !attachedFrom.length) throw err;
     // The files made the email too heavy to send: send the reply again with download links instead.
-    await sendReply({
+    await send({
       ...reply,
       attachments: [],
       text:
@@ -273,12 +283,15 @@ let checkAgain = false;
 // Gmail allows a limited number of emails a day (about 100 through Apps Script). When that runs out, emails
 // stay unread in the inbox and are answered once sending works again, instead of being lost.
 const QUOTA_ERROR = /too many times|limit exceeded|quota/i;
+// The server could not reach Gmail at all (a network problem): also keep the email and try again soon.
+const NETWORK_ERROR = /fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|aborted due to timeout/i;
+const NETWORK_RETRY_MS = Number(process.env.SEND_NETWORK_RETRY_SECONDS || 300) * 1000;
 const QUOTA_RETRY_MS = Number(process.env.SEND_QUOTA_RETRY_MINUTES || 30) * 60 * 1000;
 let sendingPausedUntil = 0;
 
-async function putBack(uid, err) {
-  sendingPausedUntil = Date.now() + QUOTA_RETRY_MS;
-  log(`daily sending limit reached (${err.message}); message ${uid} stays unread, next try at ${new Date(sendingPausedUntil).toISOString()}`);
+async function putBack(uid, err, waitMs) {
+  sendingPausedUntil = Date.now() + waitMs;
+  log(`could not send (${err.message}); message ${uid} stays unread, next try at ${new Date(sendingPausedUntil).toISOString()}`);
   await client.messageFlagsRemove({ uid: String(uid) }, ['\\Seen'], { uid: true }).catch((e) => log('could not mark unread:', e.message));
 }
 
@@ -298,7 +311,8 @@ async function checkInbox() {
         await client.messageFlagsAdd({ uid: String(uid) }, ['\\Seen'], { uid: true });
         const msg = await client.fetchOne(String(uid), { source: true }, { uid: true });
         handleMessage(msg.source).catch((err) => {
-          if (QUOTA_ERROR.test(err.message)) return putBack(uid, err);
+          if (QUOTA_ERROR.test(err.message)) return putBack(uid, err, QUOTA_RETRY_MS);
+          if (err.whileSending && NETWORK_ERROR.test(err.message)) return putBack(uid, err, NETWORK_RETRY_MS);
           log(`error handling message ${uid}: ${err.message}`);
         });
         if (Date.now() < sendingPausedUntil) break;

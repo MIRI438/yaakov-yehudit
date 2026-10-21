@@ -13,6 +13,7 @@ import { createRequire } from 'node:module';
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from './config.js';
+import { imageToJpegWithBrowser } from './convert.js';
 import { report } from './progress.js';
 import { withTempDir } from './video.js';
 
@@ -191,6 +192,15 @@ export async function checkModesty(file) {
       return { allowed: true };
     });
   } catch (err) {
+    // ffmpeg cannot read some images (e.g. tiled AVIF): convert them with the browser and check again.
+    if (!isVideo && !file.convertedByBrowser) {
+      const jpeg = await imageToJpegWithBrowser(file);
+      if (jpeg) {
+        Object.assign(file, jpeg, { convertedByBrowser: true }); // the converted image is what gets sent
+        log(`converted ${file.filename} with the browser (ffmpeg could not read it)`);
+        return checkModesty(file);
+      }
+    }
     log(`modesty check failed for ${file.filename}: ${err.message}`);
     return { allowed: false, reason: `could not be checked: ${err.message}` };
   }
