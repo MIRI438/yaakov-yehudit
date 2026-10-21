@@ -1,7 +1,7 @@
 // Email bot: anyone who emails a link (Leonardo, Freepik, a shared ChatGPT / Gemini chat, any page...)
 // gets the images / videos behind it back as attachments.
 
-import './logbuffer.js'; // first, so it sees every log line
+import { recentLogs } from './logbuffer.js'; // first, so it sees every log line
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import { config } from './config.js';
@@ -62,6 +62,17 @@ async function handleMessage(source) {
   // The subject of a reply ("Re: ...") repeats an earlier subject, so only a fresh subject counts.
   // A reply's subject ("Re: ...") repeats an earlier subject, so its links are not new.
   const incomingSubject = String(mail.subject || '').trim();
+
+  // The owner can get the log by email (where the website is filtered): an email containing LOGS_KEY.
+  const logsKey = process.env.LOGS_KEY || '';
+  if (logsKey.length >= 8 && `${incomingSubject}\n${stripQuotedText(mail.text || '')}`.includes(logsKey)) {
+    const reply = plainReply(mail, replyTo, `היומן של הבוט מצורף (500 השורות האחרונות).\nהשרת פועל ${Math.round(process.uptime() / 60)} דקות.`);
+    reply.attachments.push({ filename: 'bot-log.txt', content: Buffer.from(recentLogs(), 'utf8'), contentType: 'text/plain; charset=utf-8' });
+    await send(reply);
+    log(`sent the log to ${sender}`);
+    return;
+  }
+
   let links = findLinks(mail.text, mail.html || '', incomingSubject);
 
   // A sender that was asked to link a phone may be answering with the number or the code.
