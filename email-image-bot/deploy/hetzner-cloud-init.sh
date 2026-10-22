@@ -13,12 +13,23 @@
 # From Railway: the service > Variables > "Raw Editor" > copy everything and paste between the two EOF lines.
 # (Sending settings, PORT, PUBLIC_URL and DATA_DIR from there are ignored; this server sets its own.)
 # LOGS_KEY: a long secret word of your choice; the log is then at https://<site>/logs?key=<that word>.
+# (When /root/bot.env.in was already written by someone else, e.g. a short bootstrap, it is kept.)
+if [ ! -s /root/bot.env.in ] && [ ! -s /opt/bot.env ]; then
 cat > /root/bot.env.in <<'EOF'
 EMAIL_ADDRESS=your.bot@gmail.com
 EMAIL_PASSWORD=your16letterapppassword
 LOGS_KEY=choose-a-long-secret-word
 EOF
+fi
 # ===================================================
+# Some panels (Kamatera) strip backslashes from a pasted script, which breaks it. There, paste only:
+#   cat > /root/bot.env.in <<'EOF'
+#   EMAIL_ADDRESS=...
+#   EMAIL_PASSWORD=...
+#   LOGS_KEY=...
+#   EOF
+#   curl -fsSL https://raw.githubusercontent.com/MIRI438/yaakov-yehudit/claude/image-link-server-cvrrt5/email-image-bot/deploy/hetzner-cloud-init.sh -o /root/setup.sh
+#   systemd-run --unit=bot-setup bash /root/setup.sh
 
 set -euo pipefail
 exec > >(tee -a /var/log/bot-setup.log) 2>&1
@@ -39,7 +50,9 @@ wait_apt
 apt-get -o DPkg::Lock::Timeout=600 update -y
 apt-get -o DPkg::Lock::Timeout=600 install -y git curl ufw psmisc
 wait_apt
-curl -fsSL https://get.docker.com | sh
+# Docker's installer does not know the newest Ubuntu releases yet; Ubuntu's own package works there.
+command -v docker >/dev/null || curl -fsSL https://get.docker.com | sh || apt-get -o DPkg::Lock::Timeout=600 install -y docker.io
+systemctl enable --now docker
 
 # A little swap, so the browser never runs the server out of memory.
 if [ ! -f /swapfile ]; then
@@ -49,11 +62,12 @@ fi
 
 ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp && ufw --force enable
 
-IP=$(curl -fsS http://169.254.169.254/hetzner/v1/metadata/public-ipv4 || curl -fsS https://api.ipify.org)
+IP=$(curl -fsS -m 3 http://169.254.169.254/hetzner/v1/metadata/public-ipv4 || curl -fsS -m 20 https://api.ipify.org)
 SITE="${IP//./-}.sslip.io"
 
 # Settings: what was pasted, minus what this server decides, plus the server's own.
 mkdir -p /opt/bot-data /opt/caddy
+if [ -s /root/bot.env.in ]; then
 tr -d '\r' < /root/bot.env.in \
   | sed -E 's/^"?([A-Z0-9_]+)"?\s*=\s*"?(.*[^"])"?\s*$/\1=\2/' \
   | grep -vE '^\s*(#|$)|^(SEND_SCRIPT_URL|SEND_SCRIPT_SECRET|MAIL_RELAY_URL|MAIL_RELAY_SECRET|SMTP_HOST|SMTP_PORT|SMTP_SECURE|PORT|PUBLIC_URL|DATA_DIR)=' \
@@ -63,10 +77,11 @@ SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_SECURE=false
 PORT=8080
-PUBLIC_URL=https://$SITE
+PUBLIC_URL=http://$IP
 EOF
 chmod 600 /opt/bot.env
 rm -f /root/bot.env.in
+fi
 
 # The website behind Caddy, which gets the HTTPS certificate by itself.
 cat > /opt/caddy/Caddyfile <<EOF
@@ -78,6 +93,7 @@ http://$IP {
 }
 EOF
 docker network create botnet 2>/dev/null || true
+docker rm -f caddy 2>/dev/null || true # when the setup runs a second time
 docker run -d --name caddy --restart=always --network botnet -p 80:80 -p 443:443 \
   -v /opt/caddy/Caddyfile:/etc/caddy/Caddyfile -v caddy_data:/data caddy:2
 
