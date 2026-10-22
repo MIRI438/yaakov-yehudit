@@ -542,6 +542,12 @@ async function mainMediaWithBrowser(pageUrl, ids, { videoOnly, tried }) {
  */
 async function allMediaWithBrowser(pageUrl) {
   return withBrowserPage(pageUrl, async (page, loaded) => {
+    // Chat pages (ChatGPT) sometimes show the picture a few seconds after the page itself: wait for it (max 12s).
+    await page
+      .waitForFunction(() => [...document.images].some((i) => i.naturalWidth >= 256) || document.querySelector('video'), null, {
+        timeout: 12000,
+      })
+      .catch(() => {});
     await startVideos(page);
     // Every generated image / video in the chat, also inside shadow DOM. Each gets a marker so it can be
     // found again (to read a blob: from the page, or export the decoded picture at full resolution).
