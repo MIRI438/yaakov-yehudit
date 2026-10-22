@@ -815,7 +815,30 @@ export async function getMediaFromLink(link) {
     return all;
   }
   const one = await getMainMedia(directDownloadUrl(link));
+  if (await isSiteWideImage(link, one)) throw new Error(GENERIC_PAGE_MESSAGE);
   return [one];
+}
+
+const GENERIC_PAGE_MESSAGE =
+  'בקישור הזה אין תמונה מסוימת, רק התמונה הכללית של האתר (למשל קישור לכלי יצירת התמונות ולא לתמונה עצמה). ' +
+  'פתחו את התמונה שיצרתם ושלחו את קישור השיתוף שלה';
+
+/**
+ * True when the "main image" found is just the picture the whole site shows (its home page's og:image),
+ * e.g. for a link to a generator tool rather than to a creation. A file named after the link is never that.
+ */
+async function isSiteWideImage(link, media) {
+  if (!/^https?:/.test(media.sourceUrl || '') || matchesId(media.sourceUrl, linkIds(link))) return false;
+  const home = new URL('/', link).toString();
+  if (home === new URL(link).toString()) return false;
+  try {
+    const { res, finalUrl } = await safeFetch(home, 'text/html', false);
+    const html = (await res.text()).slice(0, 500_000);
+    const strip = (u) => u.split(/[?#]/)[0];
+    return metaMediaUrls(html, finalUrl).some((u) => strip(u) === strip(media.sourceUrl));
+  } catch {
+    return false; // the home page could not be checked: keep the result
+  }
 }
 
 /**
