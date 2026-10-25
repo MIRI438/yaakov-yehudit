@@ -180,6 +180,31 @@ export function findLinks(text = '', html = '', subject = '') {
   return own;
 }
 
+/**
+ * A link copied out of an email is often wrapped by the mail service (Gmail's google.com/url?q=...,
+ * Outlook Safe Links, Facebook's l.php?u=...). Those show a "you are being redirected" page instead of
+ * redirecting, so the real link inside is used.
+ */
+function unwrapRedirect(link) {
+  for (let i = 0; i < 3; i++) {
+    let u;
+    try {
+      u = new URL(link);
+    } catch {
+      return link;
+    }
+    const host = u.hostname.toLowerCase();
+    let inner = null;
+    if (/(^|\.)google\.[a-z.]+$/.test(host) && u.pathname === '/url') inner = u.searchParams.get('q') || u.searchParams.get('url');
+    else if (/safelinks\.protection\.outlook\.com$/.test(host)) inner = u.searchParams.get('url');
+    else if (/^l[m]?\.facebook\.com$/.test(host) && u.pathname === '/l.php') inner = u.searchParams.get('u');
+    else if (host === 'l.instagram.com') inner = u.searchParams.get('u');
+    if (!inner || !/^https?:\/\//i.test(inner)) return link;
+    link = inner;
+  }
+  return link;
+}
+
 const BARE_LINK_HOSTS = [
   'share\\.gemini\\.google', 'gemini\\.google\\.com', 'g\\.co', 'chatgpt\\.com', 'leonardo\\.ai', 'app\\.leonardo\\.ai',
   'freepik\\.com', 'magnific\\.com', 'flow\\.google\\.com', 'labs\\.google', 'pin\\.it', 'pinterest\\.com', 'pixabay\\.com',
@@ -200,7 +225,7 @@ function collectLinks(ownText, ownHtml) {
 
   const links = [];
   for (let link of found) {
-    link = link.replace(/[.,;:!?]+$/, ''); // trailing punctuation from the sentence
+    link = unwrapRedirect(link.replace(/[.,;:!?]+$/, '')); // trailing punctuation from the sentence
     if (isAllowedUrl(link) && !links.includes(link)) links.push(link);
   }
   return links.slice(0, config.maxLinksPerEmail);
