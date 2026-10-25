@@ -180,6 +180,12 @@ export function findLinks(text = '', html = '', subject = '') {
   return own;
 }
 
+const BARE_LINK_HOSTS = [
+  'share\\.gemini\\.google', 'gemini\\.google\\.com', 'g\\.co', 'chatgpt\\.com', 'leonardo\\.ai', 'app\\.leonardo\\.ai',
+  'freepik\\.com', 'magnific\\.com', 'flow\\.google\\.com', 'labs\\.google', 'pin\\.it', 'pinterest\\.com', 'pixabay\\.com',
+  'drive\\.google\\.com', 'dropbox\\.com', 'claude\\.ai', 'grok\\.com', 'copilot\\.microsoft\\.com',
+].join('|');
+
 // People often paste the link into the subject line and leave the body empty, so the caller passes it.
 function collectLinks(ownText, ownHtml) {
   const found = new Set();
@@ -188,6 +194,9 @@ function collectLinks(ownText, ownHtml) {
 
   for (const m of ownHtml.matchAll(hrefRegex)) found.add(decodeEntities(m[1]));
   for (const m of `${ownText}\n${ownHtml}`.matchAll(urlRegex)) found.add(decodeEntities(m[0]));
+  // Links copied without "https://" (common from phones), for the sites people send most.
+  const bare = new RegExp(`(?<![\\w.@/-])((?:www\\.)?(?:${BARE_LINK_HOSTS})/[^\\s<>"'()\\[\\]{}]+)`, 'gi');
+  for (const m of ownText.replace(/https?:\/\/\S+/gi, ' ').matchAll(bare)) found.add(`https://${m[1]}`);
 
   const links = [];
   for (let link of found) {

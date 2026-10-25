@@ -58,6 +58,33 @@ async function handleMessage(source) {
     log(`skipping message from ${sender || '?'}: ${ignoreReason}`);
     return;
   }
+  // Every email from a person gets an answer: the files, or what went wrong.
+  try {
+    await answerMessage(mail, replyTo, sender);
+  } catch (err) {
+    // Sending problems (quota, network) are retried by the caller; anything else gets an apology.
+    if (err.whileSending) throw err;
+    log(`error handling message from ${sender}: ${err.message}`);
+    await send(plainReply(mail, replyTo, 'משהו השתבש בטיפול בהודעה שלך. אפשר לנסות לשלוח שוב בעוד כמה דקות.'));
+  }
+}
+
+// Short notices (no link, too many emails) at most once every few minutes per sender, so a loop with
+// another automatic mailbox can never run away.
+const lastNotice = new Map();
+function noticeAllowed(sender, minutes = 1) {
+  const last = lastNotice.get(sender) || 0;
+  if (Date.now() - last < minutes * 60 * 1000) return false;
+  lastNotice.set(sender, Date.now());
+  return true;
+}
+
+const NO_LINK_TEXT =
+  'לא מצאתי קישור בהודעה.\n' +
+  'שלחו את קישור השיתוף של התמונה או הסרטון (למשל מ-Gemini, ChatGPT, Leonardo או Freepik) בגוף ההודעה או בנושא.\n' +
+  'קישורים שמופיעים רק בהודעה קודמת שמצוטטת בתשובה לא נספרים.';
+
+async function answerMessage(mail, replyTo, sender) {
   // No Leonardo / Freepik / Magnific link: ignore the email completely (no reply).
   // The subject of a reply ("Re: ...") repeats an earlier subject, so only a fresh subject counts.
   // A reply's subject ("Re: ...") repeats an earlier subject, so its links are not new.
@@ -87,11 +114,19 @@ async function handleMessage(source) {
   }
 
   if (links.length === 0) {
-    log(`no supported link in message from ${sender}, ignoring`);
+    if (!noticeAllowed(sender)) {
+      log(`no link in message from ${sender} (notice already sent a moment ago)`);
+      return;
+    }
+    log(`no link in message from ${sender}, telling them how to send one`);
+    await send(plainReply(mail, replyTo, NO_LINK_TEXT));
     return;
   }
   if (rateLimited(sender)) {
-    log(`rate limit reached for ${sender}, skipping`);
+    log(`rate limit reached for ${sender}`);
+    if (noticeAllowed(sender, 15)) {
+      await send(plainReply(mail, replyTo, 'נשלחו הרבה מאוד הודעות בשעה האחרונה. נסו שוב בעוד כמה דקות.'));
+    }
     return;
   }
   log(`message from ${sender}: ${links.length} link(s)`);

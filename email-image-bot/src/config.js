@@ -56,7 +56,7 @@ export const config = {
   maxFileBytes: num('MAX_FILE_MB', 18) * 1024 * 1024,
   maxTotalBytes: num('MAX_TOTAL_MB', 18) * 1024 * 1024,
   maxLinksPerEmail: num('MAX_LINKS_PER_EMAIL', 10),
-  maxEmailsPerSenderPerHour: num('MAX_EMAILS_PER_SENDER_PER_HOUR', 30),
+  maxEmailsPerSenderPerHour: num('MAX_EMAILS_PER_SENDER_PER_HOUR', 100),
   fetchTimeoutMs: num('FETCH_TIMEOUT_SECONDS', 20) * 1000,
   // Downloading the file itself (videos can take a while).
   downloadTimeoutMs: num('DOWNLOAD_TIMEOUT_SECONDS', 180) * 1000,
