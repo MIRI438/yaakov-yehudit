@@ -4,6 +4,7 @@
 import { readFile } from 'node:fs/promises';
 import { config } from '../config.js';
 import { sendReply } from '../mailer.js';
+import { access, usedTrial } from '../subscriptions.js';
 import { filePath, onJobEnded, touchJob } from './jobs.js';
 
 const log = (...args) => console.log(new Date().toISOString(), ...args);
@@ -59,6 +60,7 @@ async function deliver(job) {
       attachments,
     });
     job.mail = 'sent';
+    if (attachments.length && access(job.email).why === 'trial') usedTrial(job.email);
     log(`website: emailed ${attachments.length} file(s) for ${job.url}`);
   } catch (err) {
     if (/too many times|limit exceeded|quota/i.test(err.message) && (job.mailTries = (job.mailTries || 0) + 1) < 6) {

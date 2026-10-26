@@ -12,6 +12,7 @@ import {
   activationOf, checkVerification, consume, linkEmail, maskPhone, normalizePhone, PRICING, quotaFor, setActivation, signOut,
   startVerification, VERIFY, whoIsEmail,
 } from './web/accounts.js';
+import { access, adminCommand, usedTrial } from './subscriptions.js';
 import { detectSite, loadStore, recordStats } from './web/jobs.js';
 import { startWebServer } from './web/server.js';
 
@@ -92,11 +93,17 @@ async function answerMessage(mail, replyTo, sender) {
 
   // The owner can get the log by email (where the website is filtered): an email containing LOGS_KEY.
   const logsKey = process.env.LOGS_KEY || '';
-  if (logsKey.length >= 8 && `${incomingSubject}\n${stripQuotedText(mail.text || '')}`.includes(logsKey)) {
-    const reply = plainReply(mail, replyTo, `היומן של הבוט מצורף (500 השורות האחרונות).\nהשרת פועל ${Math.round(process.uptime() / 60)} דקות.`);
-    reply.attachments.push({ filename: 'bot-log.txt', content: Buffer.from(recentLogs(), 'utf8'), contentType: 'text/plain; charset=utf-8' });
+  const ownText = `${incomingSubject}\n${stripQuotedText(mail.text || '')}`;
+  if (logsKey.length >= 8 && ownText.includes(logsKey)) {
+    // The owner's commands (subscribers, price...), or just the log.
+    const command = adminCommand(sender, ownText.split(logsKey).join(' '));
+    const logInfo = `היומן של הבוט מצורף (500 השורות האחרונות).\nהשרת פועל ${Math.round(process.uptime() / 60)} דקות.\nלרשימת הפקודות: שלחו את המילה הסודית עם המילה "עזרה".`;
+    const reply = plainReply(mail, replyTo, command ? command.text : logInfo);
+    if (!command || command.wantsLog) {
+      reply.attachments.push({ filename: 'bot-log.txt', content: Buffer.from(recentLogs(), 'utf8'), contentType: 'text/plain; charset=utf-8' });
+    }
     await send(reply);
-    log(`sent the log to ${sender}`);
+    log(command ? `owner command from ${sender}: ${command.log}` : `sent the log to ${sender}`);
     return;
   }
 
@@ -127,6 +134,13 @@ async function answerMessage(mail, replyTo, sender) {
     if (noticeAllowed(sender, 15)) {
       await send(plainReply(mail, replyTo, 'נשלחו הרבה מאוד הודעות בשעה האחרונה. נסו שוב בעוד כמה דקות.'));
     }
+    return;
+  }
+  // Monthly subscriptions (when the owner turned them on).
+  const membership = access(sender);
+  if (!membership.ok) {
+    log(`not a subscriber: ${sender}`);
+    if (noticeAllowed(sender)) await send(plainReply(mail, replyTo, membership.text));
     return;
   }
   log(`message from ${sender}: ${links.length} link(s)`);
@@ -231,6 +245,8 @@ async function answerMessage(mail, replyTo, sender) {
   if (failures.length) text += `\nקישורים שלא הצליחו:\n${failures.map((f) => `• ${f}`).join('\n')}\n`;
   if (screenshots.length) text += '\nמצורף צילום מסך של הדף כפי שהבוט ראה אותו.\n';
 
+  if (membership.note && (attachments.length || downloadLinks.length)) text += `\n${membership.note}\n`;
+  if (membership.why === 'trial' && (attachments.length || downloadLinks.length)) usedTrial(sender);
   text = text.replace(/\n{3,}/g, '\n\n');
   const subject = mail.subject ? (/^re:/i.test(mail.subject) ? mail.subject : `Re: ${mail.subject}`) : 'הקובץ שלך';
   const reply = {

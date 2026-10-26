@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { findLinks } from '../extract.js';
 import { sendReply } from '../mailer.js';
 import { recentLogs } from '../logbuffer.js';
+import { access } from '../subscriptions.js';
 import { stashedPath } from '../stash.js';
 import { canEmail, validEmail } from './delivery.js';
 import {
@@ -230,6 +231,8 @@ async function route(req, res) {
       if (!allowed(who.key, links.length)) {
         return send(res, 429, { error: 'הגעתם למגבלת השימוש לשעה. נסו שוב מעט מאוחר יותר.' });
       }
+      const membership = access(email);
+      if (!membership.ok) return send(res, 403, { error: membership.text });
       if (!canEmail(email, links.length)) {
         return send(res, 429, { error: 'נשלחו יותר מדי קבצים למייל הזה בשעה האחרונה. נסו שוב מאוחר יותר.' });
       }
