@@ -70,15 +70,25 @@ async function handleMessage(source) {
   }
 }
 
-// Short notices (no link, too many emails) at most once every few minutes per sender, so a loop with
-// another automatic mailbox can never run away.
+// Short notices (no link, not a subscriber, too many emails): at most one per sender every few hours,
+// and at most NOTICES_PER_HOUR in all, so a loop with another automatic mailbox can never run away
+// (Gmail locks an account that sends or receives too much).
 const lastNotice = new Map();
-function noticeAllowed(sender, minutes = 1) {
+const noticeTimes = [];
+const NOTICES_PER_HOUR = 40;
+function noticeAllowed(sender, minutes = 6 * 60) {
+  const now = Date.now();
+  while (noticeTimes.length && noticeTimes[0] < now - 60 * 60 * 1000) noticeTimes.shift();
+  if (noticeTimes.length >= NOTICES_PER_HOUR) return false;
   const last = lastNotice.get(sender) || 0;
-  if (Date.now() - last < minutes * 60 * 1000) return false;
-  lastNotice.set(sender, Date.now());
+  if (now - last < minutes * 60 * 1000) return false;
+  lastNotice.set(sender, now);
+  noticeTimes.push(now);
   return true;
 }
+// A reply to one of our own notices (a person saying thanks, or an auto-responder): never answered again.
+const OUR_NOTICES = ['לא מצאתי קישור בהודעה', 'השירות הזה פתוח למנויים בלבד', 'נשלחו הרבה מאוד הודעות'];
+const answersOurNotice = (mail) => OUR_NOTICES.some((t) => String(mail.text || '').includes(t));
 
 const NO_LINK_TEXT =
   'לא מצאתי קישור בהודעה.\n' +
@@ -121,7 +131,7 @@ async function answerMessage(mail, replyTo, sender) {
   }
 
   if (links.length === 0) {
-    if (!noticeAllowed(sender)) {
+    if (answersOurNotice(mail) || !noticeAllowed(sender)) {
       log(`no link in message from ${sender} (notice already sent a moment ago)`);
       return;
     }
@@ -414,18 +424,16 @@ async function main() {
   if (process.env.WEB !== 'off') {
     await startWebServer().catch((err) => log('website failed to start:', err.message));
   } else await loadStore(); // the email quota is kept there too
-  log(`checking that replies can be sent (${config.sendScriptUrl ? 'Apps Script' : 'SMTP'})...`);
-  const via = await verifySending().catch((err) => {
-    console.error('Sending check failed:', err.message);
-    if (!config.sendScriptUrl) {
-      console.error('If this host blocks SMTP ports (e.g. Railway), set SEND_SCRIPT_URL - see README.');
-    }
-    return null;
-  });
-  if (!via) {
-    // Keep the website running even when email cannot work; retry email in 5 minutes via restart policy.
-    log('email bot disabled until sending works (website still running)');
-    return;
+  // When Gmail refuses (wrong password, or the account is temporarily locked), keep trying, slower and
+  // slower, instead of giving up: the bot must come back by itself once Gmail lets it in again.
+  let via = null;
+  for (let attempt = 0; !via; attempt++) {
+    log(`checking that replies can be sent (${config.sendScriptUrl ? 'Apps Script' : 'SMTP'})...`);
+    via = await verifySending().catch((err) => {
+      console.error('Sending check failed:', err.message);
+      return null;
+    });
+    if (!via) await sleep(backoff(attempt), 'sending check');
   }
   log(`replies will be sent via ${via}`);
   log(`modesty filter: ${moderationDescription()}`);
@@ -434,15 +442,28 @@ async function main() {
     // Fails closed: until this is fixed, files that need this check are not sent.
     (err) => log(`MODESTY FILTER PROBLEM - files will not be sent until it is fixed: ${err.message}`),
   );
+  // Reconnect when Gmail drops the connection: quickly the first time, then slower and slower while it keeps
+  // failing (many logins in a row look like an attack and make Gmail lock the account for longer).
+  let failures = 0;
   for (;;) {
+    const started = Date.now();
     try {
       await start();
-      log('IMAP connection closed, reconnecting in 5s');
+      log('IMAP connection closed');
     } catch (err) {
-      log('IMAP connection failed, retrying in 5s:', err.message);
+      log('IMAP connection failed:', err.message);
     }
-    await new Promise((r) => setTimeout(r, 5000));
+    failures = Date.now() - started > 10 * 60 * 1000 ? 0 : failures + 1; // a long, healthy connection resets it
+    await sleep(backoff(failures - 1), 'reconnecting');
   }
+}
+
+/** 5s, 10s, 20s ... up to 30 minutes. */
+const backoff = (attempt) => Math.min(5000 * 2 ** Math.max(0, attempt), 30 * 60 * 1000);
+
+function sleep(ms, what) {
+  log(`${what} in ${Math.round(ms / 1000)}s`);
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 main();
