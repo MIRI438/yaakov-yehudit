@@ -35,8 +35,23 @@ export function access(email) {
   if (email && email === s.owner) return { ok: true, why: 'owner' };
   const member = s.members[email];
   if (member && member.until > Date.now()) {
+    const left = imagesLeft(member);
+    if (left !== null && left <= 0) {
+      return {
+        ok: false,
+        text: `נגמרו התמונות בחבילה שלך החודש (${member.plan} תמונות, מתחדשת ב-${fmtDate(member.until)}).\n` +
+          `אפשר להוסיף עוד חבילה כבר עכשיו:\n${payLines(s)}`,
+      };
+    }
     const daysLeft = Math.ceil((member.until - Date.now()) / DAY);
-    const note = daysLeft <= 3 ? `המנוי שלך מסתיים ב-${fmtDate(member.until)}. כדי להמשיך בלי הפסקה:\n${payLines(s)}` : '';
+    const notes = [];
+    // The note goes with this reply, after its image is counted.
+    const after = left === null ? null : left - 1;
+    if (after !== null && after <= 10) {
+      notes.push(after <= 0 ? 'זו הייתה התמונה האחרונה בחבילה החודש.' : after === 1 ? 'נשארה לך תמונה אחת בחבילה החודש.' : `נשארו לך ${after} תמונות בחבילה החודש.`);
+    }
+    if (daysLeft <= 3 && !member.autoRenew) notes.push(`המנוי שלך מסתיים ב-${fmtDate(member.until)}.`);
+    const note = notes.length ? `${notes.join(' ')}\n${payLines(s)}` : '';
     return { ok: true, why: 'member', note };
   }
   const used = s.trials[email] || 0;
@@ -58,19 +73,61 @@ function payLines(s) {
   return lines.join('\n');
 }
 
-/** Counts a trial download (call only when files were actually sent). */
-export function usedTrial(email) {
+/** Images left this period (plan + extra packs), or null for an unlimited subscription. */
+function imagesLeft(member) {
+  if (!member.plan) return null;
+  return member.plan - (member.used || 0) + (member.extra || 0);
+}
+
+/**
+ * After files were actually sent: a trial counts one download per link (the caller calls once per email);
+ * a package counts every file, first from the month's images, then from extra packs.
+ */
+export function recordUse(email, files) {
   const s = subs();
   email = norm(email);
-  s.trials[email] = (s.trials[email] || 0) + 1;
+  const member = s.members[email];
+  if (s.on && member && member.until > Date.now() && member.plan) {
+    const fromPlan = Math.min(files, Math.max(0, member.plan - (member.used || 0)));
+    member.used = (member.used || 0) + fromPlan;
+    member.extra = Math.max(0, (member.extra || 0) - (files - fromPlan));
+  } else if (s.on && !member && email !== s.owner) {
+    s.trials[email] = (s.trials[email] || 0) + 1;
+  }
   saveStore();
+}
+
+/** A paid month of a package (from the owner's command now, from PayPal later). */
+export function grantPlan(email, plan, days = 30, extra = {}) {
+  const s = subs();
+  email = norm(email);
+  const member = (s.members[email] ||= { since: Date.now(), until: Date.now() });
+  member.until = Math.max(member.until, Date.now()) + days * DAY;
+  member.plan = plan;
+  member.used = 0;
+  Object.assign(member, extra);
+  saveStore();
+  return member;
+}
+
+/** An extra pack of images on top of the month's package (they last until used). */
+export function grantExtra(email, images) {
+  const s = subs();
+  email = norm(email);
+  const member = s.members[email];
+  if (!member || member.until <= Date.now()) return null;
+  member.extra = (member.extra || 0) + images;
+  saveStore();
+  return member;
 }
 
 export const ownerEmail = () => subs().owner;
 
 const HELP = `פקודות (שולחים מייל לבוט עם המילה הסודית ועם הפקודה, כל פקודה בשורה משלה):
 
-הוסף user@gmail.com 30      מוסיף מנוי ל-30 יום (או מאריך מנוי קיים ב-30 יום)
+חבילה user@gmail.com 50     חבילה של 50 תמונות לחודש (או 100), החל מהיום
+תוספת user@gmail.com 50     עוד 50 תמונות לחודש הנוכחי (למי שגמר את החבילה)
+הוסף user@gmail.com 30      מנוי בלי הגבלת תמונות ל-30 יום (או הארכה)
 הסר user@gmail.com           מבטל מנוי
 רשימה                         כל המנויים ועד מתי
 הפעל מנויים / כבה מנויים     האם השירות למנויים בלבד
@@ -87,11 +144,17 @@ export function adminCommand(sender, fresh) {
   const s = subs();
   const out = [];
   let wantsLog = false;
-  // "תשלום:" takes the rest of the email, so it is read first and removed.
-  const pay = /(?:^|\n)\s*(?:תשלום|pay)\s*:\s*([\s\S]+)$/i.exec(fresh);
-  if (pay) {
-    s.payText = pay[1].replace(/\n{3,}/g, '\n\n').trim().slice(0, 1500);
-    fresh = fresh.slice(0, pay.index);
+  // "תשלום:" can span several lines: it takes the lines after it until one that is another command.
+  const COMMAND = /^\s*(?:הוסף|add|חבילה|plan|תוספת|extra|הסר|מחק|remove|רשימה|מנויים|list|הפעל מנויים|כבה מנויים|subscriptions|מחיר|price|ניסיון|trial|עזרה|help|יומן|log)(?:\s|$)/i;
+  const lines = fresh.split('\n');
+  const payAt = lines.findIndex((l) => /^\s*(?:תשלום|pay)\s*:/i.test(l));
+  if (payAt >= 0) {
+    let end = payAt + 1;
+    while (end < lines.length && !COMMAND.test(lines[end])) end++;
+    const text = [lines[payAt].replace(/^\s*(?:תשלום|pay)\s*:\s*/i, ''), ...lines.slice(payAt + 1, end)].join('\n');
+    s.payText = text.replace(/\n{3,}/g, '\n\n').trim().slice(0, 1500);
+    lines.splice(payAt, end - payAt);
+    fresh = lines.join('\n');
     out.push('הוראות התשלום עודכנו.');
   }
   for (const raw of fresh.split('\n')) {
@@ -103,6 +166,12 @@ export function adminCommand(sender, fresh) {
       const member = (s.members[email] ||= { since: Date.now(), until: Date.now() });
       member.until = Math.max(member.until, Date.now()) + days * DAY;
       out.push(`✓ ${email}: מנוי עד ${fmtDate(member.until)}`);
+    } else if ((m = /^(?:חבילה|plan)\s+(\S+@\S+?)\s+(\d{1,5})\s*$/i.exec(line))) {
+      const member = grantPlan(m[1], Number(m[2]));
+      out.push(`✓ ${norm(m[1])}: חבילה של ${m[2]} תמונות לחודש, עד ${fmtDate(member.until)}`);
+    } else if ((m = /^(?:תוספת|extra)\s+(\S+@\S+?)\s+(\d{1,5})\s*$/i.exec(line))) {
+      const member = grantExtra(m[1], Number(m[2]));
+      out.push(member ? `✓ ${norm(m[1])}: עוד ${m[2]} תמונות (יש לו עכשיו ${imagesLeft(member) ?? 'ללא הגבלה'})` : `${norm(m[1])} אינו מנוי פעיל. קודם: חבילה ${norm(m[1])} 50`);
     } else if ((m = /^(?:הסר|מחק|remove)\s+(\S+@\S+?)\s*$/i.exec(line))) {
       const email = norm(m[1]);
       out.push(s.members[email] ? `✓ ${email} הוסר` : `${email} לא היה ברשימה`);
@@ -110,7 +179,10 @@ export function adminCommand(sender, fresh) {
     } else if (/^(?:רשימה|מנויים|list)$/i.test(line)) {
       const rows = Object.entries(s.members)
         .sort((a, b) => a[1].until - b[1].until)
-        .map(([email, mem]) => `${mem.until > Date.now() ? '✓' : '✗'} ${email} – עד ${fmtDate(mem.until)}`);
+        .map(([email, mem]) => {
+          const pkg = mem.plan ? ` · חבילת ${mem.plan}: נוצלו ${mem.used || 0}${mem.extra ? ` (+${mem.extra} תוספת)` : ''}` : '';
+          return `${mem.until > Date.now() ? '✓' : '✗'} ${email} – עד ${fmtDate(mem.until)}${pkg}`;
+        });
       out.push(rows.length ? `מנויים (${rows.length}):\n${rows.join('\n')}` : 'אין עדיין מנויים.');
     } else if (/^(?:הפעל מנויים|subscriptions on)$/i.test(line)) {
       s.on = true;

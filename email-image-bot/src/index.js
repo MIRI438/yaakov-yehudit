@@ -12,7 +12,7 @@ import {
   activationOf, checkVerification, consume, linkEmail, maskPhone, normalizePhone, PRICING, quotaFor, setActivation, signOut,
   startVerification, VERIFY, whoIsEmail,
 } from './web/accounts.js';
-import { access, adminCommand, usedTrial } from './subscriptions.js';
+import { access, adminCommand, recordUse } from './subscriptions.js';
 import { detectSite, loadStore, recordStats } from './web/jobs.js';
 import { startWebServer } from './web/server.js';
 
@@ -256,7 +256,7 @@ async function answerMessage(mail, replyTo, sender) {
   if (screenshots.length) text += '\nמצורף צילום מסך של הדף כפי שהבוט ראה אותו.\n';
 
   if (membership.note && (attachments.length || downloadLinks.length)) text += `\n${membership.note}\n`;
-  if (membership.why === 'trial' && (attachments.length || downloadLinks.length)) usedTrial(sender);
+  if (attachments.length || downloadLinks.length) recordUse(sender, membership.why === 'trial' ? 1 : attachments.length + downloadLinks.length);
   text = text.replace(/\n{3,}/g, '\n\n');
   const subject = mail.subject ? (/^re:/i.test(mail.subject) ? mail.subject : `Re: ${mail.subject}`) : 'הקובץ שלך';
   const reply = {
