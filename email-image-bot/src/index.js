@@ -451,7 +451,12 @@ async function main() {
       await start();
       log('IMAP connection closed');
     } catch (err) {
-      log('IMAP connection failed:', err.message);
+      // imapflow says only "Command failed"; Gmail's own explanation (wrong password, log in on the web...)
+      // is in responseText.
+      const detail = [err.responseText, err.serverResponseCode, err.authenticationFailed && 'authentication failed']
+        .filter(Boolean)
+        .join(' | ');
+      log('IMAP connection failed:', err.message, detail ? `(${detail})` : '');
     }
     failures = Date.now() - started > 10 * 60 * 1000 ? 0 : failures + 1; // a long, healthy connection resets it
     await sleep(backoff(failures - 1), 'reconnecting');
