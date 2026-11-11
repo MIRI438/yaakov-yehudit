@@ -12,6 +12,7 @@ import {
   activationOf, checkVerification, consume, linkEmail, maskPhone, normalizePhone, PRICING, quotaFor, setActivation, signOut,
   startVerification, VERIFY, whoIsEmail,
 } from './web/accounts.js';
+import { checkPayments, paymentText, setupPaypal } from './paypal.js';
 import { access, adminCommand, recordUse } from './subscriptions.js';
 import { detectSite, loadStore, recordStats } from './web/jobs.js';
 import { startWebServer } from './web/server.js';
@@ -108,7 +109,11 @@ async function answerMessage(mail, replyTo, sender) {
     // The owner's commands (subscribers, price...), or just the log.
     const command = adminCommand(sender, ownText.split(logsKey).join(' '));
     const logInfo = `היומן של הבוט מצורף (500 השורות האחרונות).\nהשרת פועל ${Math.round(process.uptime() / 60)} דקות.\nלרשימת הפקודות: שלחו את המילה הסודית עם המילה "עזרה".`;
-    const reply = plainReply(mail, replyTo, command ? command.text : logInfo);
+    let replyText = command ? command.text : logInfo;
+    if (command?.paypalChanged) {
+      replyText += `\n\n${await setupPaypal().catch((err) => `⚠ החיבור ל-PayPal נכשל: ${err.message}\nבדקי שהעתקת את ה-Client ID וה-Secret מהלשונית Live.`)}`;
+    }
+    const reply = plainReply(mail, replyTo, replyText);
     if (!command || command.wantsLog) {
       reply.attachments.push({ filename: 'bot-log.txt', content: Buffer.from(recentLogs(), 'utf8'), contentType: 'text/plain; charset=utf-8' });
     }
@@ -154,7 +159,11 @@ async function answerMessage(mail, replyTo, sender) {
   const membership = access(sender);
   if (!membership.ok) {
     log(`not a subscriber: ${sender}`);
-    if (noticeAllowed(sender)) await send(plainReply(mail, replyTo, membership.text));
+    if (noticeAllowed(sender, 30)) {
+      // PayPal links made for this address (or the owner's written payment instructions).
+      const links = await paymentText(sender, membership.needs);
+      await send(plainReply(mail, replyTo, links ? `${membership.head}\n\n${links}` : membership.text));
+    }
     return;
   }
   log(`message from ${sender}: ${links.length} link(s)`);
@@ -440,6 +449,10 @@ async function main() {
     if (!via) await sleep(backoff(attempt), 'sending check');
   }
   log(`replies will be sent via ${via}`);
+  // New PayPal payments, renewals and cancellations, every few minutes.
+  const confirm = (to, text) =>
+    sendReply({ to, subject: 'התשלום התקבל ✓', text: `שלום,\n\n${text}\n`, attachments: [] }).catch((err) => log('confirmation failed:', err.message));
+  setInterval(() => checkPayments(confirm).catch((err) => log("PayPal check failed:", err.message)), Number(process.env.PAYPAL_CHECK_SECONDS || 180) * 1000);
   log(`modesty filter: ${moderationDescription()}`);
   await warmUpModeration().then(
     (status) => log(`modesty filter ${status}`),

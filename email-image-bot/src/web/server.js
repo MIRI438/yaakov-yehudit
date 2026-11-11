@@ -137,6 +137,11 @@ async function route(req, res) {
   if (method === 'GET' && parts[0] === 'assets') return serveStatic(res, parts.slice(1).join('/'));
   if (method === 'GET' && url.pathname === '/favicon.ico') return serveStatic(res, 'favicon.svg');
   if (url.pathname === '/health') return send(res, 200, { ok: true });
+  // Where PayPal sends the customer back after paying (the payment itself is checked with PayPal).
+  if (method === 'GET' && url.pathname === '/paid') {
+    const text = url.searchParams.has('cancel') ? 'התשלום בוטל. אפשר לסגור את הדף.' : 'תודה! התשלום מתעדכן, ותוך כמה דקות תגיע הודעת אישור למייל. אפשר לסגור את הדף.';
+    return send(res, 200, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><body dir="rtl" style="font:20px system-ui;text-align:center;padding:60px 16px">${text}</body>`, { 'content-type': 'text/html; charset=utf-8' });
+  }
   // The bot's recent log, for hosts without a log viewer. Needs LOGS_KEY (a long secret word) in the settings.
   if (method === 'GET' && url.pathname === '/logs') {
     const key = process.env.LOGS_KEY || '';

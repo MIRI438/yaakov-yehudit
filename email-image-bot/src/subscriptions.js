@@ -39,11 +39,8 @@ export function access(email) {
   if (member && member.until > Date.now()) {
     const left = imagesLeft(member);
     if (left !== null && left <= 0) {
-      return {
-        ok: false,
-        text: `נגמרו התמונות בחבילה שלך החודש (${member.plan} תמונות, מתחדשת ב-${fmtDate(member.until)}).\n` +
-          `אפשר להוסיף עוד חבילה כבר עכשיו:\n${payLines(s)}`,
-      };
+      const head = `נגמרו התמונות בחבילה שלך החודש (${member.plan} תמונות, מתחדשת ב-${fmtDate(member.until)}).\nאפשר להוסיף עוד תמונות כבר עכשיו:`;
+      return { ok: false, needs: 'extra', head, text: `${head}\n${payLines(s)}` };
     }
     const daysLeft = Math.ceil((member.until - Date.now()) / DAY);
     const notes = [];
@@ -64,14 +61,14 @@ export function access(email) {
       : `זו הייתה ההורדה האחרונה לניסיון. מעכשיו השירות למנויים בלבד:\n${payLines(s)}`;
     return { ok: true, why: 'trial', note };
   }
-  const head = member ? `המנוי שלך הסתיים ב-${fmtDate(member.until)}.` : 'השירות הזה פתוח למנויים בלבד.';
-  return { ok: false, text: `${head}\n\n${payLines(s)}` };
+  const head = member ? `המנוי שלך הסתיים ב-${fmtDate(member.until)}. כדי לחדש:` : 'השירות הזה פתוח למנויים בלבד. כדי להצטרף:';
+  return { ok: false, needs: 'subscribe', head, text: `${head}\n\n${payLines(s)}` };
 }
 
 function payLines(s) {
   const lines = [];
   if (s.price) lines.push(`מחיר: ${s.price}`);
-  lines.push(s.payText || 'לפרטים על המנוי אפשר להשיב למייל הזה.');
+  lines.push(s.payText || (s.paypal?.id ? 'כשהתמונות נגמרות, נשלחים קישורי PayPal להוספה.' : 'לפרטים על המנוי אפשר להשיב למייל הזה.'));
   return lines.join('\n');
 }
 
@@ -125,6 +122,16 @@ export function grantExtra(email, images) {
 
 export const ownerEmail = () => subs().owner;
 
+// PayPal keys and state live with the subscriptions (server data only, never in the code).
+export function paypalSettings() {
+  const s = subs();
+  s.paypal ||= {};
+  s.paypal.pending ||= [];
+  return s.paypal;
+}
+export const savePaypal = () => saveStore();
+export const allMembers = () => subs().members;
+
 const HELP = `פקודות (שולחים מייל לבוט עם המילה הסודית ועם הפקודה, כל פקודה בשורה משלה):
 
 חבילה user@gmail.com 50     חבילה של 50 תמונות לחודש (או 100), החל מהיום
@@ -136,6 +143,7 @@ const HELP = `פקודות (שולחים מייל לבוט עם המילה הס�
 מחיר 20 ש"ח לחודש             המחיר שמופיע במייל למי שאינו מנוי
 תשלום: ...                    הוראות התשלום (כל מה שאחרי הנקודתיים, גם כמה שורות)
 ניסיון 3                      כמה הורדות חינם מקבל מי שעוד לא נרשם (0 = בלי ניסיון)
+פייפאל CLIENT_ID SECRET      חיבור PayPal (תשלום ומנוי אוטומטיים)
 חסום user@gmail.com          לא מקבל יותר כלום (גם לא תשובה)
 בטל חסימה user@gmail.com
 חסומים                        רשימת החסומים
@@ -149,8 +157,9 @@ export function adminCommand(sender, fresh) {
   const s = subs();
   const out = [];
   let wantsLog = false;
+  let paypalChanged = false;
   // "תשלום:" can span several lines: it takes the lines after it until one that is another command.
-  const COMMAND = /^\s*(?:הוסף|add|חבילה|plan|תוספת|extra|הסר|מחק|remove|חסום|block|בטל חסימה|unblock|חסומים|blocked|רשימה|מנויים|list|הפעל מנויים|כבה מנויים|subscriptions|מחיר|price|ניסיון|trial|עזרה|help|יומן|log)(?:\s|$)/i;
+  const COMMAND = /^\s*(?:הוסף|add|חבילה|plan|תוספת|extra|הסר|מחק|remove|חסום|block|בטל חסימה|unblock|חסומים|blocked|רשימה|מנויים|list|הפעל מנויים|כבה מנויים|subscriptions|מחיר|price|ניסיון|trial|עזרה|help|יומן|log|פייפאל|paypal)(?:\s|$)/i;
   const lines = fresh.split('\n');
   const payAt = lines.findIndex((l) => /^\s*(?:תשלום|pay)\s*:/i.test(l));
   if (payAt >= 0) {
@@ -181,6 +190,12 @@ export function adminCommand(sender, fresh) {
       const email = norm(m[1]);
       out.push(s.members[email] ? `✓ ${email} הוסר` : `${email} לא היה ברשימה`);
       delete s.members[email];
+    } else if ((m = /^(?:פייפאל|paypal)\s+(\S+)\s+(\S+)\s*$/i.exec(line))) {
+      const pp = paypalSettings();
+      if (pp.id !== m[1]) Object.assign(pp, { product: null, plans: {} }); // new account: its own plans
+      Object.assign(pp, { id: m[1], secret: m[2] });
+      paypalChanged = true;
+      out.push('מפתחות PayPal נשמרו, בודק את החיבור...');
     } else if ((m = /^(?:חסום|block)\s+(\S+@\S+?)\s*$/i.exec(line))) {
       const email = norm(m[1]);
       s.blocked ||= [];
@@ -202,7 +217,7 @@ export function adminCommand(sender, fresh) {
       out.push(rows.length ? `מנויים (${rows.length}):\n${rows.join('\n')}` : 'אין עדיין מנויים.');
     } else if (/^(?:הפעל מנויים|subscriptions on)$/i.test(line)) {
       s.on = true;
-      out.push('✓ השירות פתוח עכשיו למנויים בלבד' + (s.payText ? '.' : '. שימי לב: עוד לא הוגדרו הוראות תשלום (תשלום: ...).'));
+      out.push('✓ השירות פתוח עכשיו למנויים בלבד' + (s.payText || s.paypal?.id ? '.' : '. שימי לב: עוד לא הוגדרו הוראות תשלום (תשלום: ...) או PayPal.'));
     } else if (/^(?:כבה מנויים|subscriptions off)$/i.test(line)) {
       s.on = false;
       out.push('✓ השירות פתוח עכשיו לכולם, בלי בדיקת מנוי.');
@@ -224,5 +239,5 @@ export function adminCommand(sender, fresh) {
   const state = `\n\nמצב: ${s.on ? 'למנויים בלבד' : 'פתוח לכולם'} · מנויים פעילים: ${
     Object.values(s.members).filter((m) => m.until > Date.now()).length
   } · ניסיון: ${s.trial}`;
-  return { text: out.join('\n\n') + state, wantsLog, log: out.join(' | ').slice(0, 200) };
+  return { text: out.join('\n\n') + state, wantsLog, paypalChanged, log: out.join(' | ').slice(0, 200) };
 }
