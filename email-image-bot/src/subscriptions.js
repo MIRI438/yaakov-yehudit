@@ -160,6 +160,16 @@ export function adminCommand(sender, fresh) {
   let paypalChanged = false;
   // "תשלום:" can span several lines: it takes the lines after it until one that is another command.
   const COMMAND = /^\s*(?:הוסף|add|חבילה|plan|תוספת|extra|הסר|מחק|remove|חסום|block|בטל חסימה|unblock|חסומים|blocked|רשימה|מנויים|list|הפעל מנויים|כבה מנויים|subscriptions|מחיר|price|ניסיון|trial|עזרה|help|יומן|log|פייפאל|paypal)(?:\s|$)/i;
+  // PayPal keys are long, and mail programs wrap long lines: the two keys may be on lines of their own.
+  const keys = /(?:^|\n)[ \t]*(?:פייפאל|paypal)\s+([A-Za-z0-9_-]{20,})\s+([A-Za-z0-9_-]{20,})/i.exec(fresh);
+  if (keys) {
+    const pp = paypalSettings();
+    if (pp.id !== keys[1]) Object.assign(pp, { product: null, plans: {} }); // new account: its own plans
+    Object.assign(pp, { id: keys[1], secret: keys[2] });
+    paypalChanged = true;
+    out.push('מפתחות PayPal נשמרו, בודק את החיבור...');
+    fresh = fresh.slice(0, keys.index) + fresh.slice(keys.index + keys[0].length);
+  }
   const lines = fresh.split('\n');
   const payAt = lines.findIndex((l) => /^\s*(?:תשלום|pay)\s*:/i.test(l));
   if (payAt >= 0) {
@@ -190,12 +200,6 @@ export function adminCommand(sender, fresh) {
       const email = norm(m[1]);
       out.push(s.members[email] ? `✓ ${email} הוסר` : `${email} לא היה ברשימה`);
       delete s.members[email];
-    } else if ((m = /^(?:פייפאל|paypal)\s+(\S+)\s+(\S+)\s*$/i.exec(line))) {
-      const pp = paypalSettings();
-      if (pp.id !== m[1]) Object.assign(pp, { product: null, plans: {} }); // new account: its own plans
-      Object.assign(pp, { id: m[1], secret: m[2] });
-      paypalChanged = true;
-      out.push('מפתחות PayPal נשמרו, בודק את החיבור...');
     } else if ((m = /^(?:חסום|block)\s+(\S+@\S+?)\s*$/i.exec(line))) {
       const email = norm(m[1]);
       s.blocked ||= [];
