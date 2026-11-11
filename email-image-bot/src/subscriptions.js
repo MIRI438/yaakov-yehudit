@@ -57,8 +57,8 @@ export function access(email) {
   if (!member && used < s.trial) {
     const left = s.trial - used - 1;
     const note = left > 0
-      ? `זו הורדה לניסיון (נשארו עוד ${left}). אחר כך השירות למנויים בלבד:\n${payLines(s)}`
-      : `זו הייתה ההורדה האחרונה לניסיון. מעכשיו השירות למנויים בלבד:\n${payLines(s)}`;
+      ? `זו הורדה לניסיון (נשארו עוד ${left}). אחרי הניסיון השירות למנויים בלבד.\n${payLines(s)}`
+      : `זו הייתה ההורדה האחרונה לניסיון. מעכשיו השירות למנויים בלבד, ובקישור הבא תקבלו קישורי תשלום.\n${payLines(s)}`;
     return { ok: true, why: 'trial', note };
   }
   const head = member ? `המנוי שלך הסתיים ב-${fmtDate(member.until)}. כדי לחדש:` : 'השירות הזה פתוח למנויים בלבד. כדי להצטרף:';
@@ -67,7 +67,7 @@ export function access(email) {
 
 function payLines(s) {
   // With PayPal connected, payment is only through PayPal: the written instructions are not shown.
-  if (s.paypal?.plans?.[50]) return 'התשלום ב-PayPal: 50 תמונות בחודש ב-₪5, או 100 ב-₪8. כשצריך, נשלחים קישורי תשלום.';
+  if (s.paypal?.plans?.[50]) return 'המנוי: 50 תמונות בחודש ב-₪5, או 100 ב-₪8, בתשלום ב-PayPal. קישורי התשלום יגיעו במייל כשיהיה צורך.';
   const lines = [];
   if (s.price) lines.push(`מחיר: ${s.price}`);
   lines.push(s.payText || 'לפרטים על המנוי אפשר להשיב למייל הזה.');
