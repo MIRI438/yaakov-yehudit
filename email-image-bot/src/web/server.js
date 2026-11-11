@@ -232,7 +232,7 @@ async function route(req, res) {
         return send(res, 429, { error: 'הגעתם למגבלת השימוש לשעה. נסו שוב מעט מאוחר יותר.' });
       }
       const membership = access(email);
-      if (!membership.ok) return send(res, 403, { error: membership.text });
+      if (!membership.ok) return send(res, 403, { error: membership.text || 'הכתובת הזו חסומה.' });
       if (!canEmail(email, links.length)) {
         return send(res, 429, { error: 'נשלחו יותר מדי קבצים למייל הזה בשעה האחרונה. נסו שוב מאוחר יותר.' });
       }

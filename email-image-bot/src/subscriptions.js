@@ -31,6 +31,8 @@ const norm = (email) => String(email || '').trim().toLowerCase().replace(/^mailt
 export function access(email) {
   const s = subs();
   email = norm(email);
+  // Blocked by the owner (e.g. sent immodest links): no files and no answer at all.
+  if ((s.blocked ||= []).includes(email)) return { ok: false, blocked: true, text: '' };
   if (!s.on) return { ok: true, why: 'off' };
   if (email && email === s.owner) return { ok: true, why: 'owner' };
   const member = s.members[email];
@@ -134,6 +136,9 @@ const HELP = `פקודות (שולחים מייל לבוט עם המילה הס�
 מחיר 20 ש"ח לחודש             המחיר שמופיע במייל למי שאינו מנוי
 תשלום: ...                    הוראות התשלום (כל מה שאחרי הנקודתיים, גם כמה שורות)
 ניסיון 3                      כמה הורדות חינם מקבל מי שעוד לא נרשם (0 = בלי ניסיון)
+חסום user@gmail.com          לא מקבל יותר כלום (גם לא תשובה)
+בטל חסימה user@gmail.com
+חסומים                        רשימת החסומים
 יומן                          היומן של הבוט כקובץ מצורף`;
 
 /**
@@ -145,7 +150,7 @@ export function adminCommand(sender, fresh) {
   const out = [];
   let wantsLog = false;
   // "תשלום:" can span several lines: it takes the lines after it until one that is another command.
-  const COMMAND = /^\s*(?:הוסף|add|חבילה|plan|תוספת|extra|הסר|מחק|remove|רשימה|מנויים|list|הפעל מנויים|כבה מנויים|subscriptions|מחיר|price|ניסיון|trial|עזרה|help|יומן|log)(?:\s|$)/i;
+  const COMMAND = /^\s*(?:הוסף|add|חבילה|plan|תוספת|extra|הסר|מחק|remove|חסום|block|בטל חסימה|unblock|חסומים|blocked|רשימה|מנויים|list|הפעל מנויים|כבה מנויים|subscriptions|מחיר|price|ניסיון|trial|עזרה|help|יומן|log)(?:\s|$)/i;
   const lines = fresh.split('\n');
   const payAt = lines.findIndex((l) => /^\s*(?:תשלום|pay)\s*:/i.test(l));
   if (payAt >= 0) {
@@ -176,6 +181,17 @@ export function adminCommand(sender, fresh) {
       const email = norm(m[1]);
       out.push(s.members[email] ? `✓ ${email} הוסר` : `${email} לא היה ברשימה`);
       delete s.members[email];
+    } else if ((m = /^(?:חסום|block)\s+(\S+@\S+?)\s*$/i.exec(line))) {
+      const email = norm(m[1]);
+      s.blocked ||= [];
+      if (!s.blocked.includes(email)) s.blocked.push(email);
+      out.push(`⛔ ${email} חסום: לא יקבל יותר קבצים ולא תשובות`);
+    } else if ((m = /^(?:בטל חסימה|unblock)\s+(\S+@\S+?)\s*$/i.exec(line))) {
+      const email = norm(m[1]);
+      s.blocked = (s.blocked || []).filter((e) => e !== email);
+      out.push(`✓ החסימה של ${email} בוטלה`);
+    } else if (/^(?:חסומים|blocked)$/i.test(line)) {
+      out.push(s.blocked?.length ? `חסומים (${s.blocked.length}):\n${s.blocked.join('\n')}` : 'אין חסומים.');
     } else if (/^(?:רשימה|מנויים|list)$/i.test(line)) {
       const rows = Object.entries(s.members)
         .sort((a, b) => a[1].until - b[1].until)

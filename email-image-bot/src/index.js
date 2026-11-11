@@ -117,6 +117,10 @@ async function answerMessage(mail, replyTo, sender) {
     return;
   }
 
+  if (access(sender).blocked) {
+    log(`blocked sender ${sender}: ignored`);
+    return;
+  }
   let links = findLinks(mail.text, mail.html || '', incomingSubject);
 
   // A sender that was asked to link a phone may be answering with the number or the code.
