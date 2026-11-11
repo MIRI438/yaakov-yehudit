@@ -48,6 +48,21 @@ async function api(method, path, body) {
 export async function setupPaypal() {
   token = null;
   const pp = paypalSettings();
+  pp.sandbox = false;
+  try {
+    await api('GET', '/v1/notifications/webhooks-event-types');
+  } catch (err) {
+    if (!/login failed \(401\)/.test(err.message) || process.env.PAYPAL_API) throw err;
+    // Maybe these are the Sandbox (test) keys: they work only against PayPal's test site.
+    pp.sandbox = true;
+    token = null;
+    const isSandbox = await api('GET', '/v1/notifications/webhooks-event-types').then(() => true, () => false);
+    pp.sandbox = false;
+    token = null;
+    throw new Error(isSandbox
+      ? 'אלה מפתחות Sandbox (לבדיקות בלבד, בלי כסף אמיתי). צריך את המפתחות מהלשונית Live באותו מסך.'
+      : 'PayPal לא מכירים את המפתחות האלה. ודאי שהעתקת את ה-Client ID ואת ה-Secret המלאים, מהלשונית Live.');
+  }
   pp.plans ||= {};
   if (!pp.product) {
     const product = await api('POST', '/v1/catalogs/products', { name: 'Linkra – תמונות במייל', type: 'SERVICE', category: 'SOFTWARE' });

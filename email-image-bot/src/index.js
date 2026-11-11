@@ -111,7 +111,7 @@ async function answerMessage(mail, replyTo, sender) {
     const logInfo = `היומן של הבוט מצורף (500 השורות האחרונות).\nהשרת פועל ${Math.round(process.uptime() / 60)} דקות.\nלרשימת הפקודות: שלחו את המילה הסודית עם המילה "עזרה".`;
     let replyText = command ? command.text : logInfo;
     if (command?.paypalChanged) {
-      replyText += `\n\n${await setupPaypal().catch((err) => `⚠ החיבור ל-PayPal נכשל: ${err.message}\nבדקי שהעתקת את ה-Client ID וה-Secret מהלשונית Live.`)}`;
+      replyText += `\n\n${await setupPaypal().catch((err) => `⚠ החיבור ל-PayPal נכשל: ${err.message}`)}`;
     }
     const reply = plainReply(mail, replyTo, replyText);
     if (!command || command.wantsLog) {
