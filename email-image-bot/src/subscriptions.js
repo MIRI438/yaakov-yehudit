@@ -66,9 +66,11 @@ export function access(email) {
 }
 
 function payLines(s) {
+  // With PayPal connected, payment is only through PayPal: the written instructions are not shown.
+  if (s.paypal?.plans?.[50]) return 'התשלום ב-PayPal: 50 תמונות בחודש ב-₪5, או 100 ב-₪8. כשצריך, נשלחים קישורי תשלום.';
   const lines = [];
   if (s.price) lines.push(`מחיר: ${s.price}`);
-  lines.push(s.payText || (s.paypal?.id ? 'כשהתמונות נגמרות, נשלחים קישורי PayPal להוספה.' : 'לפרטים על המנוי אפשר להשיב למייל הזה.'));
+  lines.push(s.payText || 'לפרטים על המנוי אפשר להשיב למייל הזה.');
   return lines.join('\n');
 }
 
