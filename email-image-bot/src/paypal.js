@@ -177,7 +177,8 @@ export async function checkPayments(notify) {
       }
     } catch (err) {
       // PayPal deletes a link nobody paid after a few hours: then there is nothing left to check.
-      if (/\(404\)/.test(err.message)) {
+      // (Only after a few hours, in case PayPal answers 404 for a moment right after creating it.)
+      if (/\(404\)/.test(err.message) && Date.now() - p.at > 4 * 60 * 60 * 1000) {
         drop(p);
         continue;
       }
