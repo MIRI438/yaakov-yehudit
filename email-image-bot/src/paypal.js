@@ -176,9 +176,14 @@ export async function checkPayments(notify) {
         }
       }
     } catch (err) {
+      // PayPal deletes a link nobody paid after a few hours: then there is nothing left to check.
+      if (/\(404\)/.test(err.message)) {
+        drop(p);
+        continue;
+      }
       log(`PayPal check of ${p.id} failed: ${err.message}`);
     }
-    if (Date.now() - p.at > 3 * DAY) drop(p); // a link nobody paid
+    if (Date.now() - p.at > DAY) drop(p); // a link nobody paid (PayPal's links last only hours)
   }
   // Renewals and cancellations of running subscriptions (a few times a day is enough).
   if (Date.now() - (pp.renewalsCheckedAt || 0) > 4 * 60 * 60 * 1000) {
