@@ -41,6 +41,16 @@ export async function verifySending() {
   return `SMTP ${config.smtp.host}`;
 }
 
+const escapeHtml = (t) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+/** The same text as an HTML email that reads right to left (Hebrew); links stay clickable and left to right. */
+export function rtlHtml(text) {
+  const body = String(text).split(/(https?:\/\/[^\s<>"]+)/g).map((part, i) => (i % 2
+    ? `<a href="${escapeHtml(part)}" dir="ltr" style="unicode-bidi:embed;word-break:break-all">${escapeHtml(part)}</a>`
+    : escapeHtml(part))).join('').replace(/\n/g, '<br>\n');
+  return `<div dir="rtl" style="direction:rtl;text-align:right;font-family:Arial,sans-serif;font-size:15px;line-height:1.6">${body}</div>`;
+}
+
 /**
  * @param {{to: string, subject: string, text: string, inReplyTo?: string, references?: string[],
  *          attachments: {filename: string, content: Buffer, contentType: string}[]}} msg
@@ -68,6 +78,7 @@ export async function sendReply(msg) {
     to: msg.to,
     subject: msg.subject,
     text: msg.text,
+    html: rtlHtml(msg.text),
     attachments: msg.attachments,
     inReplyTo: msg.inReplyTo,
     references: msg.references,

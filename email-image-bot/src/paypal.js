@@ -134,10 +134,14 @@ export async function paymentText(email, kind) {
     for (const [images, price] of Object.entries(PACKAGES)) {
       const link = kind === 'extra' ? await extraLink(email, images) : await subscribeLink(email, images);
       lines.push(kind === 'extra'
-        ? `• עוד ${images} תמונות – ₪${price}:\n${link}`
-        : `• ${images} תמונות בחודש – ₪${price} לחודש (מתחדש לבד, אפשר לבטל מתי שרוצים ב-PayPal):\n${link}`);
+        ? `▸ עוד ${images} תמונות – ₪${price}\n${link}`
+        : `▸ ${images} תמונות בחודש – ₪${price}\n${link}`);
     }
-    return `${lines.join('\n\n')}\n\nאחרי התשלום החבילה נפתחת תוך כמה דקות, ותגיע הודעת אישור.\nהקישורים בתוקף לכמה שעות. אם עבר זמן, שלחו שוב קישור ויישלחו קישורים חדשים.`;
+    const notes = kind === 'extra'
+      ? ['אחרי התשלום תגיע הודעת אישור, והתמונות יתווספו מיד.', 'זה תשלום חד-פעמי, לא מנוי נוסף.']
+      : ['אחרי התשלום תגיע הודעת אישור, ואפשר להתחיל לשלוח קישורים.', 'המנוי מתחדש לבד כל חודש. אפשר לבטל אותו מתי שרוצים בחשבון ה-PayPal.'];
+    notes.push('הקישורים לתשלום בתוקף לכמה שעות. אם עבר זמן, שלחו שוב קישור לתמונה ותקבלו קישורי תשלום חדשים.');
+    return `${lines.join('\n\n')}\n\nחשוב לדעת:\n${notes.map((n) => `• ${n}`).join('\n')}`;
   } catch (err) {
     log('PayPal link failed:', err.message);
     return null;
@@ -159,7 +163,7 @@ export async function checkPayments(notify) {
           const member = grantPlan(p.email, p.images, 30, { autoRenew: true, subId: p.id, paidAt: sub.billing_info?.last_payment?.time || new Date().toISOString() });
           drop(p);
           log(`PayPal: subscription ${p.id} active for ${p.email} (${p.images} images)`);
-          await notify(p.email, `✓ התשלום התקבל. יש לך ${p.images} תמונות לחודש, עד ${new Date(member.until).toLocaleDateString('he-IL')}.\nהמנוי מתחדש לבד כל חודש. אפשר לבטל אותו מתי שרוצים בחשבון ה-PayPal.\nעכשיו אפשר לשלוח קישורים.`);
+          await notify(p.email, `✓ התשלום התקבל, תודה!\n\nהחבילה שלכם: ${p.images} תמונות בחודש, עד ${new Date(member.until).toLocaleDateString('he-IL')}.\nהמנוי מתחדש לבד כל חודש. אפשר לבטל אותו מתי שרוצים בחשבון ה-PayPal.\n\nאפשר להתחיל לשלוח קישורים.`);
           continue;
         }
       } else {
@@ -170,8 +174,8 @@ export async function checkPayments(notify) {
           drop(p);
           log(`PayPal: extra pack ${p.id} paid by ${p.email} (${p.images} images)`);
           await notify(p.email, member
-            ? `✓ התשלום התקבל. נוספו לך ${p.images} תמונות. אפשר להמשיך לשלוח קישורים.`
-            : `✓ התשלום התקבל, אבל לא מצאתי מנוי פעיל לכתובת הזו. כתבו לנו ונסדר את זה.`);
+            ? `✓ התשלום התקבל, תודה!\n\nנוספו לכם ${p.images} תמונות לחודש הזה. אפשר להמשיך לשלוח קישורים.`
+            : `✓ התשלום התקבל, תודה!\n\nלא מצאנו מנוי פעיל לכתובת הזו. השיבו למייל הזה ונסדר את זה.`);
           continue;
         }
       }

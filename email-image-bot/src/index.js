@@ -88,13 +88,13 @@ function noticeAllowed(sender, minutes = 6 * 60) {
   return true;
 }
 // A reply to one of our own notices (a person saying thanks, or an auto-responder): never answered again.
-const OUR_NOTICES = ['לא מצאתי קישור בהודעה', 'השירות הזה פתוח למנויים בלבד', 'נשלחו הרבה מאוד הודעות'];
+const OUR_NOTICES = ['לא מצאתי קישור בהודעה', 'השירות הזה פתוח למנויים בלבד', 'צריך מנוי חודשי', 'נגמרו התמונות של החודש', 'המנוי שלכם הסתיים', 'נשלחו הרבה מאוד הודעות'];
 const answersOurNotice = (mail) => OUR_NOTICES.some((t) => String(mail.text || '').includes(t));
 
 const NO_LINK_TEXT =
-  'לא מצאתי קישור בהודעה.\n' +
-  'שלחו את קישור השיתוף של התמונה או הסרטון (למשל מ-Gemini, ChatGPT, Leonardo או Freepik) בגוף ההודעה או בנושא.\n' +
-  'קישורים שמופיעים רק בהודעה קודמת שמצוטטת בתשובה לא נספרים.';
+  'לא מצאתי קישור בהודעה.\n\n' +
+  'שלחו את קישור השיתוף של התמונה או הסרטון (למשל מ-Gemini, ChatGPT, Leonardo או Freepik), בגוף ההודעה או בשורת הנושא.\n' +
+  'שימו לב: קישור שמופיע רק בהודעה קודמת שמצוטטת בתשובה לא נקלט. צריך להדביק אותו מחדש.';
 
 async function answerMessage(mail, replyTo, sender) {
   // No Leonardo / Freepik / Magnific link: ignore the email completely (no reply).

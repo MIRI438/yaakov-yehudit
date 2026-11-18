@@ -39,35 +39,38 @@ export function access(email) {
   if (member && member.until > Date.now()) {
     const left = imagesLeft(member);
     if (left !== null && left <= 0) {
-      const head = `נגמרו התמונות בחבילה שלך החודש (${member.plan} תמונות, מתחדשת ב-${fmtDate(member.until)}).\nאפשר להוסיף עוד תמונות כבר עכשיו:`;
-      return { ok: false, needs: 'extra', head, text: `${head}\n${payLines(s)}` };
+      const head = `נגמרו התמונות של החודש (חבילה של ${member.plan} תמונות${member.autoRenew ? `, מתחדשת ב-${fmtDate(member.until)}` : ''}).\nאפשר לקנות עוד תמונות לחודש הזה, בתשלום חד-פעמי ב-PayPal:`;
+      return { ok: false, needs: 'extra', head, text: `${head}\n\n${payLines(s)}` };
     }
     const daysLeft = Math.ceil((member.until - Date.now()) / DAY);
     const notes = [];
     // The note goes with this reply, after its image is counted.
     const after = left === null ? null : left - 1;
     if (after !== null && after <= 10) {
-      notes.push(after <= 0 ? 'זו הייתה התמונה האחרונה בחבילה החודש.' : after === 1 ? 'נשארה לך תמונה אחת בחבילה החודש.' : `נשארו לך ${after} תמונות בחבילה החודש.`);
+      notes.push(after <= 0
+        ? 'זו הייתה התמונה האחרונה בחבילה של החודש. כשתשלחו את הקישור הבא, תקבלו קישור לקניית תמונות נוספות.'
+        : after === 1 ? 'נשארה לכם עוד תמונה אחת בחבילה של החודש.' : `נשארו לכם עוד ${after} תמונות בחבילה של החודש.`);
     }
-    if (daysLeft <= 3 && !member.autoRenew) notes.push(`המנוי שלך מסתיים ב-${fmtDate(member.until)}.`);
-    const note = notes.length ? `${notes.join(' ')}\n${payLines(s)}` : '';
-    return { ok: true, why: 'member', note };
+    if (daysLeft <= 3 && !member.autoRenew) notes.push(`המנוי שלכם מסתיים ב-${fmtDate(member.until)}. אחרי זה, כשתשלחו קישור, תקבלו קישור לחידוש.`);
+    return { ok: true, why: 'member', note: notes.join('\n') };
   }
   const used = s.trials[email] || 0;
   if (!member && used < s.trial) {
     const left = s.trial - used - 1;
     const note = left > 0
-      ? `זו הורדה לניסיון (נשארו עוד ${left}). אחרי הניסיון השירות למנויים בלבד.\n${payLines(s)}`
-      : `זו הייתה ההורדה האחרונה לניסיון. מעכשיו השירות למנויים בלבד, ובקישור הבא תקבלו קישורי תשלום.\n${payLines(s)}`;
+      ? `זו הורדת ניסיון בחינם (נשארו עוד ${left}).\nאחרי הניסיון צריך מנוי. ${payLines(s)}`
+      : `זו הייתה הורדת הניסיון האחרונה.\nכדי להמשיך צריך מנוי. ${payLines(s)}\nכשתשלחו את הקישור הבא, יגיעו אליכם קישורי התשלום.`;
     return { ok: true, why: 'trial', note };
   }
-  const head = member ? `המנוי שלך הסתיים ב-${fmtDate(member.until)}. כדי לחדש:` : 'השירות הזה פתוח למנויים בלבד. כדי להצטרף:';
+  const head = member
+    ? `המנוי שלכם הסתיים ב-${fmtDate(member.until)}.\nכדי לחדש, בחרו חבילה ולחצו על הקישור לתשלום ב-PayPal:`
+    : 'כדי לקבל תמונות וסרטונים מהבוט צריך מנוי חודשי.\nבחרו חבילה ולחצו על הקישור לתשלום ב-PayPal:';
   return { ok: false, needs: 'subscribe', head, text: `${head}\n\n${payLines(s)}` };
 }
 
 function payLines(s) {
   // With PayPal connected, payment is only through PayPal: the written instructions are not shown.
-  if (s.paypal?.plans?.[50]) return 'המנוי: 50 תמונות בחודש ב-₪5, או 100 ב-₪8, בתשלום ב-PayPal. קישורי התשלום יגיעו במייל כשיהיה צורך.';
+  if (s.paypal?.plans?.[50]) return 'המחיר: 50 תמונות בחודש ב-₪5, או 100 תמונות בחודש ב-₪8, בתשלום ב-PayPal.';
   const lines = [];
   if (s.price) lines.push(`מחיר: ${s.price}`);
   lines.push(s.payText || 'לפרטים על המנוי אפשר להשיב למייל הזה.');
