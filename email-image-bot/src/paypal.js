@@ -168,6 +168,12 @@ export async function checkPayments(notify) {
         }
       } else {
         let order = await api('GET', `/v2/checkout/orders/${p.id}`);
+        if (order.status !== p.status) {
+          // Each change is logged once, so a payment that got stuck can be traced.
+          log(`PayPal: extra pack ${p.id} for ${p.email} is ${order.status}`);
+          p.status = order.status;
+          savePaypal();
+        }
         if (order.status === 'APPROVED') order = await api('POST', `/v2/checkout/orders/${p.id}/capture`, {});
         if (order.status === 'COMPLETED') {
           const member = grantExtra(p.email, p.images);
