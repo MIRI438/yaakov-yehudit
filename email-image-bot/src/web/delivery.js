@@ -4,7 +4,7 @@
 import { readFile } from 'node:fs/promises';
 import { config } from '../config.js';
 import { sendReply } from '../mailer.js';
-import { access, recordUse } from '../subscriptions.js';
+import { access, hello, recordUse } from '../subscriptions.js';
 import { filePath, onJobEnded, touchJob } from './jobs.js';
 
 const log = (...args) => console.log(new Date().toISOString(), ...args);
@@ -42,7 +42,7 @@ async function deliver(job) {
     } else if (site) links.push(`${site}/files/${job.id}/${f.id}?download=1`);
   }
 
-  let text = 'שלום,\n\n';
+  let text = `${hello(job.email)}\n\n`;
   if (job.status !== 'done') text += `לא הצלחתי להוריד מהקישור:\n${job.url}\n${job.error ? `← ${job.error}\n` : ''}`;
   else {
     text += attachments.length === 1 ? 'מצורף הקובץ מהקישור:\n' : attachments.length ? `מצורפים ${attachments.length} קבצים מהקישור:\n` : '';

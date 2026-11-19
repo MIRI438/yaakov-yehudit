@@ -13,7 +13,7 @@ import {
   startVerification, VERIFY, whoIsEmail,
 } from './web/accounts.js';
 import { checkPayments, paymentText, setupPaypal } from './paypal.js';
-import { access, adminCommand, recordUse } from './subscriptions.js';
+import { access, hello, paymentSummary, rememberName, adminCommand, recordUse } from './subscriptions.js';
 import { detectSite, loadStore, recordStats } from './web/jobs.js';
 import { startWebServer } from './web/server.js';
 
@@ -60,6 +60,7 @@ async function handleMessage(source) {
     log(`skipping message from ${sender || '?'}: ${ignoreReason}`);
     return;
   }
+  rememberName(sender, (mail.replyTo?.value?.[0]?.address ? mail.replyTo : mail.from)?.value?.[0]?.name || mail.from?.value?.[0]?.name);
   // Every email from a person gets an answer: the files, or what went wrong.
   try {
     await answerMessage(mail, replyTo, sender);
@@ -249,7 +250,7 @@ async function answerMessage(mail, replyTo, sender) {
     }
   });
 
-  let text = 'שלום,\n\n';
+  let text = `${hello(sender)}\n\n`;
   if (attachments.length === 1) text += 'מצורף הקובץ מהקישור ששלחת.\n';
   if (attachments.length > 1) text += `מצורפים ${attachments.length} קבצים מהקישורים ששלחת.\n`;
   if (downloadLinks.length) {
@@ -268,7 +269,11 @@ async function answerMessage(mail, replyTo, sender) {
   if (failures.length) text += `\nקישורים שלא הצליחו:\n${failures.map((f) => `• ${f}`).join('\n')}\n`;
   if (screenshots.length) text += '\nמצורף צילום מסך של הדף כפי שהבוט ראה אותו.\n';
 
-  if (membership.note && (attachments.length || downloadLinks.length)) text += `\n${membership.note}\n`;
+  if (membership.note && (attachments.length || downloadLinks.length)) {
+    // After the last free download: the PayPal links for both packages right away.
+    const links = membership.lastTrial ? await paymentText(sender, 'subscribe') : null;
+    text += `\n${membership.note}\n${membership.lastTrial ? `\n${links || paymentSummary()}\n` : ''}`;
+  }
   if (attachments.length || downloadLinks.length) recordUse(sender, membership.why === 'trial' ? 1 : attachments.length + downloadLinks.length);
   text = text.replace(/\n{3,}/g, '\n\n');
   const subject = mail.subject ? (/^re:/i.test(mail.subject) ? mail.subject : `Re: ${mail.subject}`) : 'הקובץ שלך';
@@ -353,7 +358,7 @@ function plainReply(mail, to, body) {
   return {
     to,
     subject: mail.subject ? (/^re:/i.test(mail.subject) ? mail.subject : `Re: ${mail.subject}`) : 'הקובץ שלך',
-    text: `שלום,\n\n${body}\n`,
+    text: `${hello(to)}\n\n${body}\n`,
     attachments: [],
     inReplyTo: mail.messageId,
     references: [...(mail.references ? [].concat(mail.references) : []), mail.messageId].filter(Boolean),
@@ -451,7 +456,7 @@ async function main() {
   log(`replies will be sent via ${via}`);
   // New PayPal payments, renewals and cancellations, every few minutes.
   const confirm = (to, text) =>
-    sendReply({ to, subject: 'התשלום התקבל ✓', text: `שלום,\n\n${text}\n`, attachments: [] }).catch((err) => log('confirmation failed:', err.message));
+    sendReply({ to, subject: 'התשלום התקבל ✓', text: `${hello(to)}\n\n${text}\n`, attachments: [] }).catch((err) => log('confirmation failed:', err.message));
   setInterval(() => checkPayments(confirm).catch((err) => log("PayPal check failed:", err.message)), Number(process.env.PAYPAL_CHECK_SECONDS || 180) * 1000);
   log(`modesty filter: ${moderationDescription()}`);
   await warmUpModeration().then(

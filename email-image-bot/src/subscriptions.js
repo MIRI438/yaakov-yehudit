@@ -14,7 +14,7 @@ function subs() {
     on: false, // off until the owner turns it on, so nobody is blocked by surprise
     price: '',
     payText: '',
-    trial: 3, // free downloads for someone who never subscribed, so they see that it works
+    trial: 10, // free downloads for someone who never subscribed, so they see that it works
     owner: '',
     members: {}, // email -> { until, since }
     trials: {}, // email -> downloads used
@@ -57,16 +57,37 @@ export function access(email) {
   const used = s.trials[email] || 0;
   if (!member && used < s.trial) {
     const left = s.trial - used - 1;
+    // The last free one also carries the payment links (added by the caller, which makes them).
     const note = left > 0
-      ? `זו הורדת ניסיון בחינם (נשארו עוד ${left}).\nאחרי הניסיון צריך מנוי. ${payLines(s)}`
-      : `זו הייתה הורדת הניסיון האחרונה.\nכדי להמשיך צריך מנוי. ${payLines(s)}\nכשתשלחו את הקישור הבא, יגיעו אליכם קישורי התשלום.`;
-    return { ok: true, why: 'trial', note };
+      ? `נשארו לכם עוד ${left === 1 ? 'הורדה אחת' : `${left} הורדות`} בחינם.`
+      : 'זו הפעם האחרונה בחינם.\nלמנוי יש לרכוש חבילה דרך אחד הקישורים:';
+    return { ok: true, why: 'trial', note, lastTrial: left <= 0 };
   }
   const head = member
     ? `המנוי שלכם הסתיים ב-${fmtDate(member.until)}.\nכדי לחדש, בחרו חבילה ולחצו על הקישור לתשלום ב-PayPal:`
     : 'כדי לקבל תמונות וסרטונים מהבוט צריך מנוי חודשי.\nבחרו חבילה ולחצו על הקישור לתשלום ב-PayPal:';
   return { ok: false, needs: 'subscribe', head, text: `${head}\n\n${payLines(s)}` };
 }
+
+/** Keeps the sender's name (as their email program shows it) for greeting them in replies. */
+export function rememberName(email, name) {
+  email = norm(email);
+  name = String(name || '').replace(/["'<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  if (!email || !name || name.includes('@')) return;
+  const names = (subs().names ||= {});
+  if (names[email] !== name) {
+    names[email] = name;
+    saveStore();
+  }
+}
+
+/** "שלום <name>," — or just "שלום," when the name is not known. */
+export const hello = (email) => {
+  const name = subs().names?.[norm(email)];
+  return name ? `שלום ${name},` : 'שלום,';
+};
+
+export const paymentSummary = () => payLines(subs());
 
 function payLines(s) {
   // With PayPal connected, payment is only through PayPal: the written instructions are not shown.
