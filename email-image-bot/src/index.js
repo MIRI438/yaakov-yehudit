@@ -270,9 +270,9 @@ async function answerMessage(mail, replyTo, sender) {
   if (screenshots.length) text += '\nמצורף צילום מסך של הדף כפי שהבוט ראה אותו.\n';
 
   if (membership.note && (attachments.length || downloadLinks.length)) {
-    // After the last free download: the PayPal links for both packages right away.
-    const links = membership.lastTrial ? await paymentText(sender, 'subscribe') : null;
-    text += `\n${membership.note}\n${membership.lastTrial ? `\n${links || paymentSummary()}\n` : ''}`;
+    // After the last free download, or the last image of the month: the PayPal links right away.
+    const links = membership.payNow ? await paymentText(sender, membership.payNow) : null;
+    text += `\n${membership.note}\n${membership.payNow ? `\n${links || paymentSummary()}\n` : ''}`;
   }
   if (attachments.length || downloadLinks.length) recordUse(sender, membership.why === 'trial' ? 1 : attachments.length + downloadLinks.length);
   text = text.replace(/\n{3,}/g, '\n\n');

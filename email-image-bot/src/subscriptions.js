@@ -48,11 +48,12 @@ export function access(email) {
     const after = left === null ? null : left - 1;
     if (after !== null && after <= 10) {
       notes.push(after <= 0
-        ? 'זו הייתה התמונה האחרונה בחבילה של החודש. כשתשלחו את הקישור הבא, תקבלו קישור לקניית תמונות נוספות.'
+        ? 'זו הייתה התמונה האחרונה בחבילה של החודש.\nאפשר לקנות עוד תמונות לחודש הזה, בתשלום חד-פעמי ב-PayPal:'
         : after === 1 ? 'נשארה לכם עוד תמונה אחת בחבילה של החודש.' : `נשארו לכם עוד ${after} תמונות בחבילה של החודש.`);
     }
     if (daysLeft <= 3 && !member.autoRenew) notes.push(`המנוי שלכם מסתיים ב-${fmtDate(member.until)}. אחרי זה, כשתשלחו קישור, תקבלו קישור לחידוש.`);
-    return { ok: true, why: 'member', note: notes.join('\n') };
+    // The last image of the month: the links to buy more go in this same reply (added by the caller).
+    return { ok: true, why: 'member', note: notes.join('\n'), payNow: after !== null && after <= 0 ? 'extra' : null };
   }
   const used = s.trials[email] || 0;
   if (!member && used < s.trial) {
@@ -61,7 +62,7 @@ export function access(email) {
     const note = left > 0
       ? `נשארו לכם עוד ${left === 1 ? 'הורדה אחת' : `${left} הורדות`} בחינם.`
       : 'זו הפעם האחרונה בחינם.\nלמנוי יש לרכוש חבילה דרך אחד הקישורים:';
-    return { ok: true, why: 'trial', note, lastTrial: left <= 0 };
+    return { ok: true, why: 'trial', note, payNow: left <= 0 ? 'subscribe' : null };
   }
   const head = member
     ? `המנוי שלכם הסתיים ב-${fmtDate(member.until)}.\nכדי לחדש, בחרו חבילה ולחצו על הקישור לתשלום ב-PayPal:`
